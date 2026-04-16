@@ -118,11 +118,12 @@ Environment Variables:
 	rootCmd.Flags().StringVarP(&skillName, "skill", "s", "", "Name of the skill to run (required)")
 	rootCmd.Flags().StringVarP(&prompt, "prompt", "p", "", "The prompt/task for the skill (required)")
 	rootCmd.Flags().StringVarP(&model, "model", "m", "gemini-3.1-flash-lite-preview", "LLM model to use")
-	rootCmd.Flags().BoolVarP(&debug, "debug", "d", false, "Enable debug logging")
+	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
 	rootCmd.Flags().StringVarP(&runnerPath, "runner", "r", "", "Path to runner.py (default: SKILL_RUNNER_PY or runner.py next to the binary)")
 	rootCmd.Flags().StringVarP(&workspace, "workspace", "w", ".", "Path to the base workspace directory")
 	rootCmd.Flags().StringVar(&runName, "run-name", "", "Human-readable name for the run workspace (allows reuse)")
-	rootCmd.Flags().StringVar(&dataDir, "data", "", "Path to a data directory to copy into the workspace")
+	rootCmd.Flags().StringVarP(&dataDir, "data", "d", "", "Path to a data directory to copy into the workspace")
+
 	_ = rootCmd.MarkFlagRequired("skill")
 	_ = rootCmd.MarkFlagRequired("prompt")
 

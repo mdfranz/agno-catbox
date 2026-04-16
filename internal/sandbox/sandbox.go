@@ -454,24 +454,74 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0755)
 }
 
-// CopyDir copies a directory tree.
+// CopyDir copies a directory tree. It avoids recursion by skipping the destination directory
+// if it is a subdirectory of the source. It handles symlinks by creating new symlinks,
+// and uses streaming copy for files to avoid loading large files into memory.
 func CopyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	absSrc, err := filepath.Abs(src)
+	if err != nil {
+		return err
+	}
+	absDst, err := filepath.Abs(dst)
+	if err != nil {
+		return err
+	}
+
+	return filepath.Walk(absSrc, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
+
+		// Avoid recursion: if we are about to walk into our own destination directory
+		if path == absDst {
+			return filepath.SkipDir
+		}
+
+		rel, err := filepath.Rel(absSrc, path)
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
+		if rel == "." {
+			return nil
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
+
+		target := filepath.Join(absDst, rel)
+
+		switch mode := info.Mode(); {
+		case mode.IsDir():
+			return os.MkdirAll(target, mode.Perm())
+		case mode&os.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		case mode.IsRegular():
+			return copyFileStreaming(path, target, mode.Perm())
+		default:
+			// Skip other special files (pipes, sockets, devices)
+			return nil
 		}
-		return os.WriteFile(target, data, info.Mode())
 	})
+}
+
+// copyFileStreaming copies a single file using io.Copy.
+func copyFileStreaming(src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	_, err = io.Copy(d, s)
+	return err
 }
