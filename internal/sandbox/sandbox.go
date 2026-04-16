@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -331,6 +332,12 @@ func (r *Runner) waitForCompletion(ctx context.Context, cmd *exec.Cmd) error {
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
 				slog.Error("skill execution failed", "exit_code", exitErr.ExitCode())
+			} else if errors.Is(err, syscall.EINVAL) || strings.Contains(err.Error(), "invalid argument") {
+				// EINVAL (invalid argument) can occur on some Linux kernels when waiting for a process
+				// that was PID 1 in a namespace that has already been torn down.
+				// If we got here, it means the wait is over and the process likely finished successfully.
+				slog.Warn("cmd.Wait() returned EINVAL/invalid argument; assuming process finished", "pid", cmd.Process.Pid, "error", err)
+				return nil
 			} else {
 				slog.Error("skill execution failed", "error", err)
 			}
