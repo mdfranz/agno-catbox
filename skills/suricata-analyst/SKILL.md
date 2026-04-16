@@ -11,22 +11,12 @@ metadata:
 
 ## Instructions
 
-### Step 1: Set Up the Environment First
+### Step 1: Environment Readiness & Initial Action
 
-Always initialize a local Python environment with `uv` before reading or transforming EVE logs.
+The Python environment is already fully set up and activated for you. You have access to `polars` and `orjson`. Do NOT attempt to create a virtual environment or install packages.
 
-1. **Create the virtual environment**:
-   ```bash
-   uv venv
-   source .venv/bin/activate
-   ```
-2. **Install the required libraries**:
-   ```bash
-   uv pip install polars orjson
-   ```
-3. **Create reusable scripts in the current working directory**. Do not rely on ad hoc shell one-liners for repeatable analysis.
-
-DO NOT DO THIS: ```source .venv/bin/activate && uv pip install polars orjson -q && python3 << 'EOF'```
+1. **Assume `eve.json` is present** in your current working directory. Do NOT ask the user for permission or confirmation. Immediately proceed to Step 2 to sample the data and discover its contents.
+2. **Create reusable scripts in the current working directory**. Do not rely on ad hoc shell one-liners for repeatable analysis.
 
 
 ### Step 2: Initial Discovery with `orjson`
@@ -70,7 +60,6 @@ Use `orjson` for fast line-by-line inspection and schema sampling before buildin
 6. **Document findings**: Maintain an `analyst_log-YY-MM-DD_HH-MM.md` file for every session.
 
 ## Working Agreements
-- **Python environment**: ALWAYS create a virtual environment with `uv venv` and install dependencies with `uv pip install polars orjson`. Do NOT use `uv run`.
 - **Tool re-use**: ALWAYS search for and re-use existing tools and scripts in the current directory before creating new ones.
 - **Data-First retrieval**: ALWAYS check for and use existing `.parquet` files in the current directory before rescanning `eve.json`.
 - **Script retention**: Always create and retain scripts such as `analyze_*.py` in the current project directory. Do not place analysis scripts in `/tmp`.

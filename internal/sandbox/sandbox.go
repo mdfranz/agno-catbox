@@ -17,6 +17,7 @@ import (
 type Runner struct {
 	SkillConfig   *skill.SkillConfig
 	WorkspacePath string
+	BaseWorkspace string
 	Prompt        string
 	Model         string
 	Debug         bool
@@ -65,7 +66,7 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 
 	// Copy skill directory into rootfs
 	rootfsSkillDir := filepath.Join(rootfs.Path, ".skill")
-	if err := copyDir(absSkillDir, rootfsSkillDir); err != nil {
+	if err := CopyDir(absSkillDir, rootfsSkillDir); err != nil {
 		return fmt.Errorf("failed to copy skill dir to rootfs: %w", err)
 	}
 
@@ -73,21 +74,22 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	env := SetupEnvironment()
 	// Inside the namespace, PATH points to /bin (where we symlinked allowed commands)
 	env.Values["PATH"] = "/bin:/usr/bin"
-	envList := env.ToEnv()
-
-	// The command that runs inside the namespace: python3 runner.py ...
-	// Default to the whitelisted python3 in /bin
+	
 	pythonBin := "/bin/python3"
-
-	// If the workspace has a virtual environment, use its python to ensure
-	// dependencies (agno, yaml, etc.) are available to the runner.
-	venvPython := filepath.Join(r.WorkspacePath, ".venv", "bin", "python3")
+	
+	// Check if the base workspace has a virtual environment.
+	venvPath := filepath.Join(r.BaseWorkspace, ".venv")
+	venvPython := filepath.Join(venvPath, "bin", "python3")
+	hasVenv := false
 	if _, err := os.Stat(venvPython); err == nil {
-		pythonBin = "/workspace/.venv/bin/python3"
+		hasVenv = true
+		pythonBin = "/.venv/bin/python3"
+		env.Values["VIRTUAL_ENV"] = "/.venv"
 		if r.Debug {
-			fmt.Fprintf(os.Stderr, "Debug: using workspace venv python: %s\n", pythonBin)
+			fmt.Fprintf(os.Stderr, "Debug: using base workspace venv python: %s\n", venvPython)
 		}
 	}
+	envList := env.ToEnv()
 
 	childArgs := []string{
 		"/runner.py",
@@ -104,6 +106,20 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 
 	// Build the mount list for the child
 	mounts := BindMountList(rootfs.Path, r.WorkspacePath, r.SkillConfig)
+
+	// Bind-mount the .venv if it exists
+	if hasVenv {
+		venvTarget := filepath.Join(rootfs.Path, ".venv")
+		if err := os.MkdirAll(venvTarget, 0755); err != nil {
+			return fmt.Errorf("failed to create .venv dir in rootfs: %w", err)
+		}
+		mounts = append(mounts, MountEntry{
+			Source: venvPath,
+			Target: venvTarget,
+			FSType: "",
+			Flags:  bindReadOnly,
+		})
+	}
 
 	// Serialize the child config
 	childConfig := ChildConfig{
@@ -166,6 +182,16 @@ func (r *Runner) runWithoutNamespaces(ctx context.Context) error {
 	}
 	defer os.RemoveAll(cmdDir)
 
+	pythonBin := "python3"
+	venvPath := filepath.Join(r.BaseWorkspace, ".venv")
+	venvPython := filepath.Join(venvPath, "bin", "python3")
+	if _, err := os.Stat(venvPython); err == nil {
+		pythonBin = venvPython
+		if r.Debug {
+			fmt.Fprintf(os.Stderr, "Debug: using base workspace venv python (fallback): %s\n", pythonBin)
+		}
+	}
+
 	pythonArgs := []string{
 		runnerPyPath,
 		r.SkillConfig.Name,
@@ -179,10 +205,14 @@ func (r *Runner) runWithoutNamespaces(ctx context.Context) error {
 		pythonArgs = append(pythonArgs, "--debug")
 	}
 
-	cmd := exec.CommandContext(ctx, "python3", pythonArgs...)
+	cmd := exec.CommandContext(ctx, pythonBin, pythonArgs...)
 
 	env := SetupEnvironment()
 	env.ConfigurePath(cmdDir)
+	// Add VIRTUAL_ENV if we're using a venv so Python sets up paths correctly
+	if pythonBin == venvPython {
+		env.Values["VIRTUAL_ENV"] = venvPath
+	}
 	cmd.Env = env.ToEnv()
 	cmd.Dir = r.WorkspacePath
 	cmd.Stdout = os.Stdout
@@ -260,8 +290,8 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0755)
 }
 
-// copyDir copies a directory tree.
-func copyDir(src, dst string) error {
+// CopyDir copies a directory tree.
+func CopyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err

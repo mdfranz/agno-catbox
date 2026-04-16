@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/mdfranz/skill-runner/internal/runner"
 	"github.com/mdfranz/skill-runner/internal/sandbox"
@@ -25,7 +26,8 @@ func main() {
 	promptFlag := flag.String("prompt", "", "The prompt/task for the skill (required)")
 	modelFlag := flag.String("model", "gemini-2.5-flash", "LLM model to use")
 	debugFlag := flag.Bool("debug", false, "Enable debug logging")
-	workspaceFlag := flag.String("workspace", ".", "Path to the workspace directory")
+	workspaceFlag := flag.String("workspace", ".", "Path to the base workspace directory")
+	dataFlag := flag.String("data", "", "Path to a data directory to copy into the workspace")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage: skill-runner [OPTIONS]
@@ -40,6 +42,7 @@ Examples:
   skill-runner -skill suricata-analyst -prompt "Analyze eve.json"
   skill-runner -skill suricata-analyst -prompt "..." -model gemini-2.5-flash
   skill-runner -skill my-skill -prompt "Run analysis" -debug -workspace /data/workspace
+  skill-runner -skill suricata-analyst -prompt "Analyze data" -data ./my-data
 
 Environment Variables:
   GOOGLE_API_KEY       Google Gemini API key
@@ -68,11 +71,14 @@ Environment Variables:
 		os.Exit(1)
 	}
 
-	workspacePath, err := filepath.Abs(*workspaceFlag)
+	baseWorkspace, err := filepath.Abs(*workspaceFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to resolve workspace path: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Create a timestamped workspace directory
+	workspacePath := filepath.Join(baseWorkspace, fmt.Sprintf("run-%s-%s", *skillNameFlag, time.Now().Format("20060102-150405")))
 
 	config := runner.Config{
 		SkillName:     *skillNameFlag,
@@ -81,7 +87,11 @@ Environment Variables:
 		Model:         *modelFlag,
 		Debug:         *debugFlag,
 		WorkspacePath: workspacePath,
+		BaseWorkspace: baseWorkspace,
+		DataDir:       *dataFlag,
 	}
+
+	fmt.Printf("Using workspace: %s\n", workspacePath)
 
 	ctx := context.Background()
 	if err := runner.RunSkill(ctx, config); err != nil {

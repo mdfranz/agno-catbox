@@ -16,6 +16,8 @@ type Config struct {
 	Model         string
 	Debug         bool
 	WorkspacePath string
+	BaseWorkspace string
+	DataDir       string
 }
 
 // RunSkill executes a skill with the given configuration
@@ -31,10 +33,18 @@ func RunSkill(ctx context.Context, config Config) error {
 		return fmt.Errorf("failed to create workspace: %w", err)
 	}
 
+	// Copy data if provided
+	if config.DataDir != "" {
+		if err := sandbox.CopyDir(config.DataDir, config.WorkspacePath); err != nil {
+			return fmt.Errorf("failed to copy data directory: %w", err)
+		}
+	}
+
 	// Create and run the sandbox
 	runner := &sandbox.Runner{
 		SkillConfig:   skillConfig,
 		WorkspacePath: config.WorkspacePath,
+		BaseWorkspace: config.BaseWorkspace,
 		Prompt:        config.Prompt,
 		Model:         config.Model,
 		Debug:         config.Debug,
