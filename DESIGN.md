@@ -71,13 +71,11 @@ allowed_commands:
   - cat
 ```
 
-**How it works**: A temporary directory is created containing symlinks to only the resolved paths of allowed commands. PATH is set to only this directory.
+**How it works**: A temporary directory is created containing symlinks to only the resolved paths of allowed commands.
 
-In namespace mode, the rootfs `/bin/` directory contains only these symlinks. In fallback mode, PATH points to the temp symlink directory.
+In namespace mode, the rootfs `/bin/` directory contains only these symlinks, and `PATH` is set to `/bin:/usr/bin`. In fallback mode, `PATH` is set to the temp symlink directory.
 
-This is strictly better than the previous approach of adding directories (like `/usr/bin`) to PATH, which exposed every binary in those directories.
-
-**Limitation (fallback mode only)**: The agent can still invoke binaries by absolute path (e.g., `/usr/bin/curl`) if it knows they exist. Namespace mode prevents this because the binary literally doesn't exist in the rootfs.
+**Limitation**: The agent can still invoke binaries by absolute path (e.g., `/usr/bin/curl`) if it knows they exist, because `/usr` is bind-mounted (in namespace mode) or accessible natively (in fallback mode).
 
 ### Layer 3: Environment Variable Filtering
 
@@ -113,7 +111,7 @@ If cgroup setup fails, a warning is printed but execution continues. The timeout
 - **Network access**: The agent can make outbound network connections (no network namespace isolation yet). This is the biggest remaining gap — the agent could exfiltrate data if it has a command that supports network I/O (like `python3` with the `requests` library).
 - **Side channels**: Timing, cache, and other hardware side channels
 - **Kernel exploits**: A kernel vulnerability could break namespace isolation
-- **Shared library abuse**: `/usr` is mounted read-only but is the full host `/usr` — a determined attacker could find and exec binaries there (namespace mode partially mitigates this since PATH only includes `/bin` symlinks, but the files are technically accessible)
+- **Shared library abuse**: `/usr` is mounted read-only but is the full host `/usr` — a determined attacker could find and exec binaries there.
 
 ## Skill Configuration
 

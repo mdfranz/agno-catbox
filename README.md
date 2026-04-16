@@ -6,7 +6,7 @@ A Go-based tool that runs [Agno](https://docs.agno.com) AI agent skills in a san
 
 - Linux (kernel 4.18+ with unprivileged user namespaces enabled)
 - Go 1.21+ (to build)
-- Python 3 (in the workspace, with Agno and dependencies installed)
+- Python 3 and [uv](https://github.com/astral-sh/uv) (for workspace setup)
 - API keys for the model you want to use
 
 ## Build
@@ -27,58 +27,53 @@ Produces the Go CLI binary. At runtime, the Python runner script is resolved in 
 
    ```bash
    export GEMINI_API_KEY="your-key-here"
-   # or
-   export GOOGLE_API_KEY="your-key-here"
    ```
 
-2. **Prepare a workspace** with your data and a Python environment:
+2. **Prepare the workspace:**
 
    ```bash
-   mkdir -p ~/workspace
-   cp /path/to/eve.json ~/workspace/
-   cd ~/workspace
-   uv venv && source .venv/bin/activate
-   uv pip install agno pyyaml google-genai google-generativeai
+   ./prep.sh
    ```
+   This script creates a `./runs` directory and sets up a Python virtual environment with all necessary dependencies (Agno, Polars, orjson, etc.).
 
-3. **Create a skill** (or use the included `suricata-analyst`):
+3. **Add your data:**
 
    ```bash
-   mkdir -p skills/my-skill
-   ```
-
-   `skills/my-skill/skill.yaml`:
-   ```yaml
-   name: my-skill
-   description: Analyzes security events
-   allowed_commands:
-     - python3
-     - jq
-     - grep
-     - cat
-   max_memory: 512M
-   timeout: 60s
-   ```
-
-4. **Run:**
-
-   ```bash
-   ./skill-runner -skill my-skill -prompt "Analyze the events" -workspace ~/workspace
+   cp /path/to/eve.json ./runs/
    ```
 
 ## Usage
 
+```bash
+./skill-runner -skill <name> -prompt "<task>" [options]
 ```
-skill-runner -skill <name> -prompt "<task>" [options]
 
-Options:
-  -skill       Skill name or path (required)
-  -prompt      Task for the agent (required)
-  -model       Model ID (default: gemini-2.5-flash)
-  -runner      Path to runner.py (default: SKILL_RUNNER_PY or runner.py next to the binary)
-  -workspace   Workspace directory (default: .)
-  -debug       Enable debug logging
+**Options:**
+- `-skill`: Skill name or path (e.g., `suricata-analyst`)
+- `-prompt`: Task for the agent (e.g., "Find top 10 DNS queries")
+- `-workspace`: Workspace directory (default: `.`)
+- `-model`: Model ID (default: `gemini-2.0-flash`)
+- `-debug`: Enable debug logging
+
+### Example: Suricata Threat Hunting
+
+The following example uses the built-in `suricata-analyst` skill to investigate network logs:
+
+```bash
+./skill-runner \
+  -skill suricata-analyst \
+  -prompt "Analyze eve.json for suspicious mDNS traffic and rare SNIs" \
+  -workspace ./runs
 ```
+
+**What the agent does:**
+1. **Discovers Schema**: Samples `eve.json` using `orjson` to understand the event structures.
+2. **Optimizes Data**: Converts filtered JSON events to Parquet (e.g., `mdns.parquet`) for high-performance analysis with Polars.
+3. **Executes Analysis**: Generates and runs Python scripts (e.g., `analyze_mdns.py`) to aggregate and pivot data.
+4. **Reports Findings**: Identifies anomalies such as unauthorized mDNS queries or suspicious external TLS connections.
+
+The generated analysis scripts and Parquet files are retained in the workspace for further inspection.
+
 
 ## Security Model
 
@@ -86,7 +81,7 @@ See [DESIGN.md](DESIGN.md) for the full security architecture.
 
 **With namespace isolation** (default on supported kernels):
 - The agent process runs inside a separate user, mount, and PID namespace
-- Filesystem is restricted to a minimal rootfs: only allowed command binaries, shared libraries, and the workspace are visible
+- Filesystem is restricted to a minimal rootfs, but the host's `/usr` directory is bind-mounted (read-only) along with the workspace (read-write).
 - Host home directories, SSH keys, and system configs are not accessible
 - The old root is unmounted after pivot_root
 
