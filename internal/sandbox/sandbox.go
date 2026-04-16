@@ -479,8 +479,9 @@ func CopyDir(src, dst string) error {
 			return err
 		}
 
-		// Avoid recursion: if we are about to walk into our own destination directory
-		if path == absDst {
+		// Avoid recursion: skip the destination dir itself, or any ancestor of it
+		// that lives under src (e.g. the "runs/" parent when dst is "runs/run-xxx/").
+		if path == absDst || strings.HasPrefix(absDst, path+string(os.PathSeparator)) {
 			return filepath.SkipDir
 		}
 
