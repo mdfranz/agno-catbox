@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,7 @@ type RootFS struct {
 //	/workspace/     -> (marker; bind-mounted from host workspace)
 //	/etc/           -> minimal files
 func PrepareRootFS(skillConfig *skill.SkillConfig) (*RootFS, error) {
+	slog.Debug("os: MkdirTemp", "pattern", "skill-runner-rootfs-*")
 	rootDir, err := os.MkdirTemp("", "skill-runner-rootfs-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rootfs temp dir: %w", err)
@@ -43,7 +45,9 @@ func PrepareRootFS(skillConfig *skill.SkillConfig) (*RootFS, error) {
 		"proc", "dev", "tmp", "workspace", "etc",
 	}
 	for _, d := range dirs {
-		if err := os.MkdirAll(filepath.Join(rootDir, d), 0755); err != nil {
+		dirPath := filepath.Join(rootDir, d)
+		slog.Debug("os: MkdirAll", "path", dirPath)
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
 			os.RemoveAll(rootDir)
 			return nil, fmt.Errorf("failed to create rootfs dir %s: %w", d, err)
 		}
@@ -70,6 +74,7 @@ func PrepareRootFS(skillConfig *skill.SkillConfig) (*RootFS, error) {
 		// If the binary is in /usr or /lib, we can symlink it because those are bind-mounted.
 		// Otherwise (e.g. /home or /usr/local), we MUST copy it into the rootfs.
 		if strings.HasPrefix(resolved, "/usr") || strings.HasPrefix(resolved, "/lib") {
+			slog.Debug("os: Symlink", "oldname", resolved, "newname", linkPath)
 			if err := os.Symlink(resolved, linkPath); err != nil {
 				os.RemoveAll(rootDir)
 				return nil, fmt.Errorf("failed to symlink %s: %w", cmd, err)
@@ -84,14 +89,18 @@ func PrepareRootFS(skillConfig *skill.SkillConfig) (*RootFS, error) {
 
 	// Write a minimal /etc/passwd so tools that need it don't fail
 	passwdContent := "root:x:0:0:root:/workspace:/bin/sh\nnobody:x:65534:65534:nobody:/:/bin/false\n"
-	if err := os.WriteFile(filepath.Join(rootDir, "etc", "passwd"), []byte(passwdContent), 0644); err != nil {
+	passwdPath := filepath.Join(rootDir, "etc", "passwd")
+	slog.Debug("os: WriteFile", "path", passwdPath)
+	if err := os.WriteFile(passwdPath, []byte(passwdContent), 0644); err != nil {
 		os.RemoveAll(rootDir)
 		return nil, fmt.Errorf("failed to write /etc/passwd: %w", err)
 	}
 
 	// Write a minimal /etc/group
 	groupContent := "root:x:0:\nnobody:x:65534:\n"
-	if err := os.WriteFile(filepath.Join(rootDir, "etc", "group"), []byte(groupContent), 0644); err != nil {
+	groupPath := filepath.Join(rootDir, "etc", "group")
+	slog.Debug("os: WriteFile", "path", groupPath)
+	if err := os.WriteFile(groupPath, []byte(groupContent), 0644); err != nil {
 		os.RemoveAll(rootDir)
 		return nil, fmt.Errorf("failed to write /etc/group: %w", err)
 	}
@@ -102,6 +111,7 @@ func PrepareRootFS(skillConfig *skill.SkillConfig) (*RootFS, error) {
 // Cleanup removes the rootfs temp directory.
 func (r *RootFS) Cleanup() {
 	if r != nil && r.Path != "" {
+		slog.Debug("os: RemoveAll", "path", r.Path)
 		os.RemoveAll(r.Path)
 	}
 }

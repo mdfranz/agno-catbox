@@ -178,6 +178,7 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 		return fmt.Errorf("failed to get self executable: %w", err)
 	}
 
+	slog.Debug("os: Pipe")
 	readyR, readyW, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("failed to create readiness pipe: %w", err)
@@ -426,7 +427,9 @@ func resolveRunnerScriptPath(configuredPath, executablePath string) (string, err
 
 // killProcessGroup sends SIGKILL to the entire process group.
 func killProcessGroup(pid int) {
+	slog.Debug("syscall: kill", "pid", -pid, "sig", "SIGKILL")
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	slog.Debug("syscall: kill", "pid", pid, "sig", "SIGKILL")
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 }
 

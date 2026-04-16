@@ -40,7 +40,7 @@ def main():
     skill_dir = sys.argv[3]
 
     # Parse optional arguments
-    model_id = "gemini-3-flash-preview"
+    model_id = "gemini-3.1-flash-lite-preview"
     debug = False
     if "--model" in sys.argv:
         idx = sys.argv.index("--model")

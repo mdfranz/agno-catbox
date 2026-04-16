@@ -104,6 +104,7 @@ func setupMountsAndPivot(config ChildConfig) error {
 
 	// Make the rootfs a mount point (required for pivot_root).
 	// Bind-mount it onto itself.
+	slog.Debug("syscall: mount", "source", rootfs, "target", rootfs, "flags", "MS_BIND|MS_REC")
 	if err := syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
 		return fmt.Errorf("bind mount rootfs onto itself: %w", err)
 	}
@@ -138,12 +139,14 @@ func setupMountsAndPivot(config ChildConfig) error {
 
 		switch m.Flags {
 		case bindReadOnly:
+			slog.Debug("syscall: mount", "source", m.Source, "target", m.Target, "flags", "MS_BIND|MS_REC")
 			if err := syscall.Mount(m.Source, m.Target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
 				// Non-fatal: the source might not exist on this system
 				slog.Warn("sandbox child: bind mount failed", "source", m.Source, "target", m.Target, "error", err)
 				continue
 			}
 			// Remount read-only
+			slog.Debug("syscall: mount", "source", "", "target", m.Target, "flags", "MS_BIND|MS_REMOUNT|MS_RDONLY|MS_REC")
 			if err := syscall.Mount("", m.Target, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY|syscall.MS_REC, ""); err != nil {
 				slog.Warn("sandbox child: remount ro failed", "target", m.Target, "error", err)
 			} else {
@@ -151,12 +154,14 @@ func setupMountsAndPivot(config ChildConfig) error {
 			}
 
 		case bindReadWrite:
+			slog.Debug("syscall: mount", "source", m.Source, "target", m.Target, "flags", "MS_BIND|MS_REC")
 			if err := syscall.Mount(m.Source, m.Target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
 				return fmt.Errorf("bind mount %s -> %s: %w", m.Source, m.Target, err)
 			}
 			slog.Debug("sandbox child: mounted ok", "target", m.Target)
 
 		case mountProc:
+			slog.Debug("syscall: mount", "source", m.Source, "target", m.Target, "fstype", m.FSType)
 			if err := syscall.Mount(m.Source, m.Target, m.FSType, 0, ""); err != nil {
 				slog.Warn("sandbox child: mount proc failed", "error", err)
 			} else {
@@ -164,6 +169,7 @@ func setupMountsAndPivot(config ChildConfig) error {
 			}
 
 		case mountTmpfs:
+			slog.Debug("syscall: mount", "source", m.Source, "target", m.Target, "fstype", m.FSType, "flags", "MS_NOSUID|MS_NODEV")
 			if err := syscall.Mount(m.Source, m.Target, m.FSType, syscall.MS_NOSUID|syscall.MS_NODEV, "size=64m"); err != nil {
 				slog.Warn("sandbox child: mount tmpfs failed", "error", err)
 			} else {
@@ -187,17 +193,19 @@ func setupMountsAndPivot(config ChildConfig) error {
 		return fmt.Errorf("mkdir old_root: %w", err)
 	}
 
-	slog.Debug("sandbox child: pivot_root", "new_root", rootfs, "old_root", oldRoot)
+	slog.Debug("syscall: pivot_root", "new_root", rootfs, "old_root", oldRoot)
 	if err := syscall.PivotRoot(rootfs, oldRoot); err != nil {
 		return fmt.Errorf("pivot_root: %w", err)
 	}
 
 	// chdir to new root
+	slog.Debug("syscall: chdir", "path", "/")
 	if err := syscall.Chdir("/"); err != nil {
 		return fmt.Errorf("chdir /: %w", err)
 	}
 
 	// Unmount old root and remove the mount point
+	slog.Debug("syscall: unmount", "target", "/.old_root", "flags", "MNT_DETACH")
 	if err := syscall.Unmount("/.old_root", syscall.MNT_DETACH); err != nil {
 		return fmt.Errorf("unmount old root: %w", err)
 	}
@@ -205,6 +213,7 @@ func setupMountsAndPivot(config ChildConfig) error {
 	slog.Debug("sandbox child: old root unmounted, pivot complete")
 
 	// chdir to workspace
+	slog.Debug("syscall: chdir", "path", "/workspace")
 	if err := syscall.Chdir("/workspace"); err != nil {
 		return fmt.Errorf("chdir /workspace: %w", err)
 	}
@@ -227,5 +236,6 @@ func bindDevNode(devDir, name string) {
 	f.Close()
 
 	// Bind mount the host device
+	slog.Debug("syscall: mount", "source", hostPath, "target", targetPath, "flags", "MS_BIND")
 	_ = syscall.Mount(hostPath, targetPath, "", syscall.MS_BIND, "")
 }

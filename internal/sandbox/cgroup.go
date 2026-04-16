@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +24,7 @@ func (c *CgroupConfig) CreateCgroupV2(pid int) (string, error) {
 	cgroupPath := filepath.Join("/sys/fs/cgroup", fmt.Sprintf("skill-runner-%d", pid))
 
 	// Create cgroup directory
+	slog.Debug("os: MkdirAll", "path", cgroupPath)
 	if err := os.MkdirAll(cgroupPath, 0755); err != nil {
 		return "", fmt.Errorf("failed to create cgroup directory %s: %w", cgroupPath, err)
 	}
@@ -65,6 +67,7 @@ func CleanupCgroup(cgroupPath string) error {
 	// Wait briefly for processes to exit
 	time.Sleep(100 * time.Millisecond)
 
+	slog.Debug("os: Remove", "path", cgroupPath)
 	if err := os.Remove(cgroupPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove cgroup %s: %w", cgroupPath, err)
 	}
@@ -74,6 +77,7 @@ func CleanupCgroup(cgroupPath string) error {
 
 // writeCgroupFile writes a value to a cgroup control file
 func writeCgroupFile(path, value string) error {
+	slog.Debug("cgroup: writing file", "path", path, "value", value)
 	f, err := os.OpenFile(path, os.O_WRONLY, 0644)
 	if err != nil {
 		return err

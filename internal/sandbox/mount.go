@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,7 @@ func SetupEnvironment() Environment {
 // binaries and nothing else — unlike adding whole directories like /usr/bin.
 // Returns the path to the temp dir (caller must clean up) and any error.
 func CreateCommandDir(skillConfig *skill.SkillConfig) (string, error) {
+	slog.Debug("os: MkdirTemp", "pattern", "skill-runner-cmds-*")
 	dir, err := os.MkdirTemp("", "skill-runner-cmds-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create command directory: %w", err)
@@ -60,6 +62,7 @@ func CreateCommandDir(skillConfig *skill.SkillConfig) (string, error) {
 			continue
 		}
 		linkPath := filepath.Join(dir, cmd)
+		slog.Debug("os: Symlink", "oldname", realPath, "newname", linkPath)
 		if err := os.Symlink(realPath, linkPath); err != nil {
 			// Clean up on failure
 			os.RemoveAll(dir)
@@ -97,6 +100,7 @@ func CreateWorkspaceStructure(workspacePath string) error {
 	subdirs := []string{"data", "code", "skills", "output"}
 	for _, dir := range subdirs {
 		dirPath := filepath.Join(workspacePath, dir)
+		slog.Debug("os: MkdirAll", "path", dirPath)
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
 			return fmt.Errorf("failed to create %s directory: %w", dir, err)
 		}
