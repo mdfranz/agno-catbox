@@ -1,0 +1,14 @@
+name: suricata-analyst
+description: Analyzes Suricata EVE JSON logs to identify network threats, suspicious egress, and protocol anomalies.
+allowed_commands:
+  - python3
+  - uv
+  - ls
+  - cat
+  - grep
+  - jq
+  - head
+  - tail
+  - wc
+max_memory: 1G
+timeout: 300s
