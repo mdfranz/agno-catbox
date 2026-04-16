@@ -6,10 +6,12 @@ The Agno Skill Runner is a Go binary that executes a Python-based Agno runner in
 
 ## Design Goals
 
-1. **Real isolation**: The agent process should not be able to see or access host files outside the workspace
+1. **Credential protection**: The agent process cannot see host home directories, SSH keys, or system config files
 2. **No root required**: Uses unprivileged user namespaces — no Docker, no setuid, no capabilities
 3. **Defense in depth**: Multiple independent layers so failure of one doesn't compromise all security
 4. **Graceful degradation**: Falls back to reduced isolation on systems without namespace support
+
+> **What this is not**: A strong security container. Network access is unrestricted, the full host `/usr` tree is visible inside the sandbox, and `allowed_commands` cannot enforce command whitelisting in namespace mode (see Layer 2). The primary value is preventing accidental credential exposure, not containing an adversarial agent.
 
 ## Process Flow
 
@@ -75,7 +77,7 @@ allowed_commands:
 
 In namespace mode, the rootfs `/bin/` directory contains only these symlinks, and `PATH` is set to `/bin:/usr/bin`. In fallback mode, `PATH` is set to the temp symlink directory.
 
-**Limitation**: The agent can still invoke binaries by absolute path (e.g., `/usr/bin/curl`) if it knows they exist, because `/usr` is bind-mounted (in namespace mode) or accessible natively (in fallback mode).
+**This does not reliably restrict commands.** Because `/usr` is bind-mounted in full (read-only) in namespace mode, any binary under `/usr/bin` is reachable by absolute path regardless of `allowed_commands`. For example, an agent using `ShellTools` can run `/usr/bin/curl` or `/usr/bin/nc` even if neither is listed. In fallback mode, the host filesystem is fully accessible. Treat `allowed_commands` as documentation of intent, not enforcement.
 
 ### Layer 3: Environment Variable Filtering
 
@@ -108,10 +110,12 @@ If cgroup setup fails, a warning is printed but execution continues. The timeout
 
 ## What This Does NOT Prevent
 
-- **Network access**: The agent can make outbound network connections (no network namespace isolation yet). This is the biggest remaining gap — the agent could exfiltrate data if it has a command that supports network I/O (like `python3` with the `requests` library).
-- **Side channels**: Timing, cache, and other hardware side channels
-- **Kernel exploits**: A kernel vulnerability could break namespace isolation
-- **Shared library abuse**: `/usr` is mounted read-only but is the full host `/usr` — a determined attacker could find and exec binaries there.
+- **Network access**: No network namespace (`CLONE_NEWNET`) is used. The agent has full outbound network access and can exfiltrate data, make API calls, or open reverse shells using any network-capable binary under `/usr`.
+- **Arbitrary binary execution**: The full host `/usr` tree is bind-mounted read-only. Any binary in `/usr/bin`, `/usr/sbin`, `/usr/local/bin`, etc. is accessible by absolute path, bypassing `allowed_commands`.
+- **Resource exhaustion**: cgroups v2 limits require a writable `/sys/fs/cgroup`. On many systems (containers, some VMs) this is read-only and limits silently don't apply. The timeout is the only guaranteed bound.
+- **Fallback mode filesystem access**: If namespace setup fails, the fallback path only restricts `PATH` — the agent can access the full host filesystem via absolute paths.
+- **Side channels**: Timing, cache, and other hardware side channels.
+- **Kernel exploits**: A kernel vulnerability could break namespace isolation.
 
 ## Skill Configuration
 

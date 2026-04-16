@@ -3,6 +3,7 @@ package sandbox
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +18,7 @@ type ChildConfig struct {
 	Args          []string     `json:"args"`
 	Env           []string     `json:"env"`
 	Mounts        []MountEntry `json:"mounts"`
+	Debug         bool         `json:"debug"`
 }
 
 const childEnvKey = "_SKILL_RUNNER_SANDBOX_CHILD"
@@ -34,29 +36,41 @@ func IsChildProcess() bool {
 func RunChild() {
 	configJSON := os.Getenv(childEnvKey)
 	if configJSON == "" {
-		fmt.Fprintf(os.Stderr, "sandbox child: missing config\n")
+		slog.Error("sandbox child: missing config")
 		os.Exit(namespaceBootstrapExitCode)
 	}
 
 	var config ChildConfig
 	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
-		fmt.Fprintf(os.Stderr, "sandbox child: invalid config: %v\n", err)
+		slog.Error("sandbox child: invalid config", "error", err)
 		os.Exit(namespaceBootstrapExitCode)
 	}
+
+	// Initialize child logger to write structured logs to stderr.
+	// The parent process captures this stderr.
+	logLevel := slog.LevelInfo
+	if config.Debug {
+		logLevel = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	slog.SetDefault(logger)
 
 	if err := setupMountsAndPivot(config); err != nil {
-		fmt.Fprintf(os.Stderr, "sandbox child: mount setup failed: %v\n", err)
+		slog.Error("sandbox child: mount setup failed", "error", err)
 		os.Exit(namespaceBootstrapExitCode)
 	}
+	slog.Debug("sandbox child: mounts and pivot_root successful")
 
 	if err := signalChildReady(); err != nil {
-		fmt.Fprintf(os.Stderr, "sandbox child: failed to signal readiness: %v\n", err)
+		slog.Error("sandbox child: failed to signal readiness", "error", err)
 		os.Exit(namespaceBootstrapExitCode)
 	}
+	slog.Debug("sandbox child: signaled readiness to parent")
 
 	// exec the real command inside the new root
+	slog.Info("sandbox child: executing command", "cmd", config.Command, "args", config.Args)
 	if err := syscall.Exec(config.Command, append([]string{config.Command}, config.Args...), config.Env); err != nil {
-		fmt.Fprintf(os.Stderr, "sandbox child: exec failed: %v\n", err)
+		slog.Error("sandbox child: exec failed", "error", err)
 		os.Exit(namespaceBootstrapExitCode)
 	}
 }
@@ -95,11 +109,13 @@ func setupMountsAndPivot(config ChildConfig) error {
 	}
 
 	// Perform all bind mounts
-	for _, m := range config.Mounts {
+	for i, m := range config.Mounts {
+		slog.Debug("sandbox child: mounting", "i", i, "type", m.Flags.String(), "source", m.Source, "target", m.Target)
+
 		// Ensure target exists. If it's a file mount, create the parent dir and then the file.
 		sourceInfo, err := os.Stat(m.Source)
 		if err != nil && m.Flags != mountProc && m.Flags != mountTmpfs {
-			fmt.Fprintf(os.Stderr, "sandbox child: warning: stat source %s: %v\n", m.Source, err)
+			slog.Warn("sandbox child: stat source failed", "source", m.Source, "error", err)
 			continue
 		}
 
@@ -124,27 +140,34 @@ func setupMountsAndPivot(config ChildConfig) error {
 		case bindReadOnly:
 			if err := syscall.Mount(m.Source, m.Target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
 				// Non-fatal: the source might not exist on this system
-				fmt.Fprintf(os.Stderr, "sandbox child: warning: bind mount %s -> %s: %v\n", m.Source, m.Target, err)
+				slog.Warn("sandbox child: bind mount failed", "source", m.Source, "target", m.Target, "error", err)
 				continue
 			}
 			// Remount read-only
 			if err := syscall.Mount("", m.Target, "", syscall.MS_BIND|syscall.MS_REMOUNT|syscall.MS_RDONLY|syscall.MS_REC, ""); err != nil {
-				fmt.Fprintf(os.Stderr, "sandbox child: warning: remount ro %s: %v\n", m.Target, err)
+				slog.Warn("sandbox child: remount ro failed", "target", m.Target, "error", err)
+			} else {
+				slog.Debug("sandbox child: mounted ok", "target", m.Target)
 			}
 
 		case bindReadWrite:
 			if err := syscall.Mount(m.Source, m.Target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
 				return fmt.Errorf("bind mount %s -> %s: %w", m.Source, m.Target, err)
 			}
+			slog.Debug("sandbox child: mounted ok", "target", m.Target)
 
 		case mountProc:
 			if err := syscall.Mount(m.Source, m.Target, m.FSType, 0, ""); err != nil {
-				fmt.Fprintf(os.Stderr, "sandbox child: warning: mount proc: %v\n", err)
+				slog.Warn("sandbox child: mount proc failed", "error", err)
+			} else {
+				slog.Debug("sandbox child: mounted ok", "target", m.Target)
 			}
 
 		case mountTmpfs:
 			if err := syscall.Mount(m.Source, m.Target, m.FSType, syscall.MS_NOSUID|syscall.MS_NODEV, "size=64m"); err != nil {
-				fmt.Fprintf(os.Stderr, "sandbox child: warning: mount tmpfs: %v\n", err)
+				slog.Warn("sandbox child: mount tmpfs failed", "error", err)
+			} else {
+				slog.Debug("sandbox child: mounted ok", "target", m.Target)
 			}
 		}
 	}
@@ -164,6 +187,7 @@ func setupMountsAndPivot(config ChildConfig) error {
 		return fmt.Errorf("mkdir old_root: %w", err)
 	}
 
+	slog.Debug("sandbox child: pivot_root", "new_root", rootfs, "old_root", oldRoot)
 	if err := syscall.PivotRoot(rootfs, oldRoot); err != nil {
 		return fmt.Errorf("pivot_root: %w", err)
 	}
@@ -178,6 +202,7 @@ func setupMountsAndPivot(config ChildConfig) error {
 		return fmt.Errorf("unmount old root: %w", err)
 	}
 	os.RemoveAll("/.old_root")
+	slog.Debug("sandbox child: old root unmounted, pivot complete")
 
 	// chdir to workspace
 	if err := syscall.Chdir("/workspace"); err != nil {

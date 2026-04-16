@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,13 +18,14 @@ import (
 
 // Runner manages the execution of a skill in a sandbox
 type Runner struct {
-	SkillConfig   *skill.SkillConfig
-	WorkspacePath string
-	BaseWorkspace string
-	Prompt        string
-	Model         string
-	Debug         bool
-	RunnerScript  string
+	SkillConfig     *skill.SkillConfig
+	WorkspacePath   string
+	BaseWorkspace   string
+	Prompt          string
+	Model           string
+	Debug           bool
+	RunnerScript    string
+	ChildLogWriter  io.Writer // when set, child stderr is tee'd here in addition to os.Stderr
 }
 
 var errNamespaceBootstrap = errors.New("namespace sandbox bootstrap failed")
@@ -33,18 +35,27 @@ var errNamespaceBootstrap = errors.New("namespace sandbox bootstrap failed")
 // If namespaces are unavailable, it falls back to symlink-based PATH
 // restriction with process group controls.
 func (r *Runner) Run(ctx context.Context) error {
+	slog.Info("starting sandbox run", "skill", r.SkillConfig.Name, "workspace", r.WorkspacePath)
 	if NamespacesAvailable() {
+		slog.Info("sandbox mode: namespace isolation (user+mount+pid)")
 		if err := r.runWithNamespaces(ctx); err == nil {
+			slog.Info("sandbox run completed successfully")
 			return nil
 		} else if errors.Is(err, errNamespaceBootstrap) {
-			fmt.Fprintf(os.Stderr, "Warning: namespace isolation failed, falling back to PATH restriction only: %v\n", err)
+			slog.Warn("namespace bootstrap failed, falling back to PATH restriction only", "error", err)
+			slog.Info("sandbox mode: fallback (PATH restriction only, host filesystem accessible)")
 			return r.runWithoutNamespaces(ctx)
 		} else {
 			return err
 		}
 	}
-	fmt.Fprintf(os.Stderr, "Warning: namespace isolation unavailable, falling back to PATH restriction only\n")
-	return r.runWithoutNamespaces(ctx)
+	slog.Warn("namespace isolation unavailable, falling back to PATH restriction only")
+	slog.Info("sandbox mode: fallback (PATH restriction only, host filesystem accessible)")
+	err := r.runWithoutNamespaces(ctx)
+	if err == nil {
+		slog.Info("sandbox run completed successfully (fallback)")
+	}
+	return err
 }
 
 // runWithNamespaces uses the re-exec pattern with CLONE_NEWUSER + CLONE_NEWNS + CLONE_NEWPID
@@ -65,23 +76,27 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	}
 
 	// Prepare a minimal rootfs with only allowed binaries
+	slog.Info("preparing rootfs")
 	rootfs, err := PrepareRootFS(r.SkillConfig)
 	if err != nil {
 		return fmt.Errorf("failed to prepare rootfs: %w", err)
 	}
 	defer rootfs.Cleanup()
+	slog.Debug("rootfs prepared", "path", rootfs.Path)
 
 	// Copy runner.py into the rootfs so it's accessible after pivot_root
 	rootfsRunnerPy := filepath.Join(rootfs.Path, "runner.py")
 	if err := copyFile(runnerPyPath, rootfsRunnerPy); err != nil {
 		return fmt.Errorf("failed to copy runner.py to rootfs: %w", err)
 	}
+	slog.Debug("copied runner script to rootfs", "src", runnerPyPath, "dst", rootfsRunnerPy)
 
 	// Copy skill directory into rootfs
 	rootfsSkillDir := filepath.Join(rootfs.Path, ".skill")
 	if err := CopyDir(absSkillDir, rootfsSkillDir); err != nil {
 		return fmt.Errorf("failed to copy skill dir to rootfs: %w", err)
 	}
+	slog.Debug("copied skill directory to rootfs", "src", absSkillDir, "dst", rootfsSkillDir)
 
 	// Build the environment for the child
 	env := SetupEnvironment()
@@ -98,11 +113,10 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 		hasVenv = true
 		pythonBin = "/.venv/bin/python3"
 		env.Values["VIRTUAL_ENV"] = "/.venv"
-		if r.Debug {
-			fmt.Fprintf(os.Stderr, "Debug: using base workspace venv python: %s\n", venvPython)
-		}
+		slog.Debug("using base workspace venv python", "path", venvPython)
 	}
 	envList := env.ToEnv()
+	slog.Debug("prepared environment for child", "count", len(envList))
 
 	childArgs := []string{
 		"/runner.py",
@@ -116,9 +130,16 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	if r.Debug {
 		childArgs = append(childArgs, "--debug")
 	}
+	slog.Debug("prepared child arguments", "args", childArgs)
 
 	// Build the mount list for the child
 	mounts := BindMountList(rootfs.Path, r.WorkspacePath, r.SkillConfig)
+	slog.Debug("prepared mount list", "count", len(mounts))
+	if r.Debug {
+		for i, m := range mounts {
+			slog.Debug("mount entry", "i", i, "source", m.Source, "target", m.Target, "type", m.Flags.String())
+		}
+	}
 
 	// Bind-mount the .venv if it exists
 	if hasVenv {
@@ -142,6 +163,7 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 		Args:          childArgs,
 		Env:           envList,
 		Mounts:        mounts,
+		Debug:         r.Debug,
 	}
 	configJSON, err := json.Marshal(childConfig)
 	if err != nil {
@@ -169,7 +191,7 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	)
 	cmd.ExtraFiles = []*os.File{readyW}
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = r.childStderr()
 	cmd.Dir = r.WorkspacePath
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -181,6 +203,7 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 		return fmt.Errorf("%w: failed to setup namespaces: %w", errNamespaceBootstrap, err)
 	}
 
+	slog.Info("starting namespaced child process", "exe", selfExe)
 	if err := cmd.Start(); err != nil {
 		readyW.Close()
 		return fmt.Errorf("%w: failed to start namespaced process: %w", errNamespaceBootstrap, err)
@@ -226,9 +249,7 @@ func (r *Runner) runWithoutNamespaces(ctx context.Context) error {
 	venvPython := filepath.Join(venvPath, "bin", "python3")
 	if _, err := os.Stat(venvPython); err == nil {
 		pythonBin = venvPython
-		if r.Debug {
-			fmt.Fprintf(os.Stderr, "Debug: using base workspace venv python (fallback): %s\n", pythonBin)
-		}
+		slog.Debug("using base workspace venv python (fallback)", "path", pythonBin)
 	}
 
 	pythonArgs := []string{
@@ -255,13 +276,14 @@ func (r *Runner) runWithoutNamespaces(ctx context.Context) error {
 	cmd.Env = env.ToEnv()
 	cmd.Dir = r.WorkspacePath
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = r.childStderr()
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid:   true,
 		Pdeathsig: syscall.SIGKILL,
 	}
 
+	slog.Info("starting fallback process", "python", pythonBin)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start process: %w", err)
 	}
@@ -283,9 +305,11 @@ func (r *Runner) attachCgroup(cmd *exec.Cmd) func() {
 	)
 	cgroupPath, err := cgroupConfig.CreateCgroupV2(cmd.Process.Pid)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: cgroup resource limits not enforced: %v\n", err)
+		slog.Warn("cgroup resource limits not enforced", "error", err)
 		return func() {}
 	}
+
+	slog.Debug("attached to cgroup", "path", cgroupPath)
 
 	return func() {
 		if cgroupPath != "" {
@@ -303,14 +327,23 @@ func (r *Runner) waitForCompletion(ctx context.Context, cmd *exec.Cmd) error {
 	select {
 	case err := <-doneChan:
 		if err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				slog.Error("skill execution failed", "exit_code", exitErr.ExitCode())
+			} else {
+				slog.Error("skill execution failed", "error", err)
+			}
 			return fmt.Errorf("skill execution failed: %w", err)
 		}
+		slog.Info("skill execution successful")
 		return nil
 	case <-time.After(r.SkillConfig.ParsedTimeout):
+		slog.Error("skill execution timed out", "timeout", r.SkillConfig.ParsedTimeout)
 		killProcessGroup(cmd.Process.Pid)
 		<-doneChan
 		return fmt.Errorf("skill execution timed out after %s", r.SkillConfig.ParsedTimeout)
 	case <-ctx.Done():
+		slog.Error("sandbox run cancelled", "error", ctx.Err())
 		killProcessGroup(cmd.Process.Pid)
 		<-doneChan
 		return ctx.Err()
@@ -395,6 +428,15 @@ func resolveRunnerScriptPath(configuredPath, executablePath string) (string, err
 func killProcessGroup(pid int) {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	_ = syscall.Kill(pid, syscall.SIGKILL)
+}
+
+// childStderr returns the writer to use for the child process's stderr.
+// When a ChildLogWriter is set, stderr is tee'd to both the terminal and the log.
+func (r *Runner) childStderr() io.Writer {
+	if r.ChildLogWriter != nil {
+		return io.MultiWriter(os.Stderr, r.ChildLogWriter)
+	}
+	return os.Stderr
 }
 
 // copyFile copies a single file.

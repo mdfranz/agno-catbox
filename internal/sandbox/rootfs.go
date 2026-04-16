@@ -247,3 +247,18 @@ const (
 	mountProc
 	mountTmpfs
 )
+
+func (f mountFlags) String() string {
+	switch f {
+	case bindReadOnly:
+		return "bind-ro"
+	case bindReadWrite:
+		return "bind-rw"
+	case mountProc:
+		return "proc"
+	case mountTmpfs:
+		return "tmpfs"
+	default:
+		return "unknown"
+	}
+}
