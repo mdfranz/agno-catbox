@@ -3,3 +3,4 @@ skill-runner
 .venv/
 __pycache__/
 *.test
+eve.json
