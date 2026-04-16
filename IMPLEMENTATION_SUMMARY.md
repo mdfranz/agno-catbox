@@ -5,13 +5,13 @@
 ```
 cmd/skill-runner/main.go
   ├─ Detects re-exec child mode (sandbox.IsChildProcess)
-  └─ Normal CLI: parses flags → runner.RunSkill()
+  └─ Normal CLI: parses flags (including optional runner path) → runner.RunSkill()
 
 internal/runner/exec.go
   └─ Loads skill config → creates workspace → sandbox.Runner.Run()
 
 internal/sandbox/
-  ├─ sandbox.go      Orchestrates execution; two paths:
+  ├─ sandbox.go      Orchestrates execution; resolves runner.py; two paths:
   │                    runWithNamespaces (re-exec + pivot_root)
   │                    runWithoutNamespaces (symlink PATH fallback)
   ├─ namespace.go    Checks namespace support, sets CLONE flags + UID/GID maps
@@ -56,7 +56,10 @@ The runner tries namespace isolation first. If the kernel doesn't support unpriv
 
 ## Runtime Dependencies
 
-**Go binary**: statically compiled, no runtime dependencies.
+**Go binary**: statically compiled.
+
+**Python runner script**:
+- Resolved from `-runner`, `SKILL_RUNNER_PY`, or `runner.py` next to the binary
 
 **Python environment** (in workspace):
 - `agno` — agent framework

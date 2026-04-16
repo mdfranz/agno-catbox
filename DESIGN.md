@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Agno Skill Runner is a Go binary that executes Python-based Agno AI agent skills inside a sandboxed Linux process. It uses unprivileged Linux namespaces for filesystem isolation, symlink-based PATH restriction for command whitelisting, cgroups v2 for resource limits, and process group controls for reliable cleanup.
+The Agno Skill Runner is a Go binary that executes a Python-based Agno runner inside a sandboxed Linux process. It uses unprivileged Linux namespaces for filesystem isolation, symlink-based PATH restriction for command whitelisting, cgroups v2 for resource limits, and process group controls for reliable cleanup.
 
 ## Design Goals
 
@@ -14,8 +14,10 @@ The Agno Skill Runner is a Go binary that executes Python-based Agno AI agent sk
 ## Process Flow
 
 ```
-User: ./skill-runner -skill X -prompt "..."
+User: ./skill-runner -skill X -prompt "..." [-runner /path/to/runner.py]
   │
+  ├─ Resolve Python runner path:
+  │    -runner → SKILL_RUNNER_PY → runner.py next to binary
   ├─ Load skill.yaml (allowed_commands, limits)
   ├─ Prepare minimal rootfs (temp dir with command symlinks)
   ├─ Re-exec self with CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWPID
@@ -28,11 +30,12 @@ User: ./skill-runner -skill X -prompt "..."
        └─ exec python3 runner.py → Agno agent runs
 ```
 
-If namespaces are unavailable, the fallback path:
+If namespaces are unavailable, or namespace bootstrap fails before the Python runner starts, the fallback path is used:
 
 ```
 User: ./skill-runner -skill X -prompt "..."
   │
+  ├─ Resolve Python runner path
   ├─ Load skill.yaml
   ├─ Create temp dir with symlinks to allowed commands only
   ├─ Filter environment to API keys + restricted PATH
@@ -140,7 +143,7 @@ timeout: 300s
 
 ## Error Handling Philosophy
 
-- **Namespace setup**: If unavailable, fall back to PATH restriction with a warning
+- **Namespace setup**: If unavailable or bootstrap fails before exec, fall back to PATH restriction with a warning
 - **cgroup setup**: If it fails, warn but continue (timeout still applies)
 - **Command resolution**: Skip commands that don't exist on the host
 - **Agent errors**: runner.py exits non-zero on failure so the Go layer reports the real error

@@ -15,7 +15,11 @@ A Go-based tool that runs [Agno](https://docs.agno.com) AI agent skills in a san
 go build -o skill-runner ./cmd/skill-runner
 ```
 
-Produces a single static binary.
+Produces the Go CLI binary. At runtime, the Python runner script is resolved in this order:
+
+1. `-runner /path/to/runner.py`
+2. `SKILL_RUNNER_PY=/path/to/runner.py`
+3. `runner.py` next to the `skill-runner` binary
 
 ## Setup
 
@@ -71,6 +75,7 @@ Options:
   -skill       Skill name or path (required)
   -prompt      Task for the agent (required)
   -model       Model ID (default: gemini-2.5-flash)
+  -runner      Path to runner.py (default: SKILL_RUNNER_PY or runner.py next to the binary)
   -workspace   Workspace directory (default: .)
   -debug       Enable debug logging
 ```
@@ -90,6 +95,8 @@ See [DESIGN.md](DESIGN.md) for the full security architecture.
 - Environment variables are filtered to only API keys
 - Process group isolation ensures timeout kills all subprocesses
 - The agent can still read host filesystem paths if it uses absolute paths directly
+
+Fallback is used both when namespaces are unavailable and when namespace bootstrap fails before the Python runner starts.
 
 **Always applied:**
 - Environment variable filtering (only API keys pass through)

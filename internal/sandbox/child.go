@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
@@ -19,6 +20,8 @@ type ChildConfig struct {
 }
 
 const childEnvKey = "_SKILL_RUNNER_SANDBOX_CHILD"
+const childReadyEnvKey = "_SKILL_RUNNER_CHILD_READY_FD"
+const namespaceBootstrapExitCode = 125
 
 // IsChildProcess returns true if this process is a re-exec'd sandbox child.
 func IsChildProcess() bool {
@@ -32,25 +35,54 @@ func RunChild() {
 	configJSON := os.Getenv(childEnvKey)
 	if configJSON == "" {
 		fmt.Fprintf(os.Stderr, "sandbox child: missing config\n")
-		os.Exit(126)
+		os.Exit(namespaceBootstrapExitCode)
 	}
 
 	var config ChildConfig
 	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox child: invalid config: %v\n", err)
-		os.Exit(126)
+		os.Exit(namespaceBootstrapExitCode)
 	}
 
 	if err := setupMountsAndPivot(config); err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox child: mount setup failed: %v\n", err)
-		os.Exit(126)
+		os.Exit(namespaceBootstrapExitCode)
+	}
+
+	if err := signalChildReady(); err != nil {
+		fmt.Fprintf(os.Stderr, "sandbox child: failed to signal readiness: %v\n", err)
+		os.Exit(namespaceBootstrapExitCode)
 	}
 
 	// exec the real command inside the new root
 	if err := syscall.Exec(config.Command, append([]string{config.Command}, config.Args...), config.Env); err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox child: exec failed: %v\n", err)
-		os.Exit(126)
+		os.Exit(namespaceBootstrapExitCode)
 	}
+}
+
+func signalChildReady() error {
+	fdStr := os.Getenv(childReadyEnvKey)
+	if fdStr == "" {
+		return nil
+	}
+
+	fd, err := strconv.Atoi(fdStr)
+	if err != nil {
+		return fmt.Errorf("invalid ready fd %q: %w", fdStr, err)
+	}
+
+	readyFile := os.NewFile(uintptr(fd), "sandbox-child-ready")
+	if readyFile == nil {
+		return fmt.Errorf("failed to open ready fd %d", fd)
+	}
+	defer readyFile.Close()
+
+	if _, err := readyFile.Write([]byte{'1'}); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func setupMountsAndPivot(config ChildConfig) error {

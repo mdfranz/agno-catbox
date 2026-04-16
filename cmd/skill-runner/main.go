@@ -26,6 +26,7 @@ func main() {
 	promptFlag := flag.String("prompt", "", "The prompt/task for the skill (required)")
 	modelFlag := flag.String("model", "gemini-2.5-flash", "LLM model to use")
 	debugFlag := flag.Bool("debug", false, "Enable debug logging")
+	runnerFlag := flag.String("runner", "", "Path to runner.py (default: SKILL_RUNNER_PY or runner.py next to the binary)")
 	workspaceFlag := flag.String("workspace", ".", "Path to the base workspace directory")
 	dataFlag := flag.String("data", "", "Path to a data directory to copy into the workspace")
 
@@ -44,12 +45,13 @@ Examples:
   skill-runner -skill my-skill -prompt "Run analysis" -debug -workspace /data/workspace
   skill-runner -skill suricata-analyst -prompt "Analyze data" -data ./my-data
 
-Environment Variables:
-  GOOGLE_API_KEY       Google Gemini API key
-  GEMINI_API_KEY       Alias for GOOGLE_API_KEY
-  ANTHROPIC_API_KEY    Anthropic Claude API key
-  OPENAI_API_KEY       OpenAI API key
-`)
+	Environment Variables:
+	  SKILL_RUNNER_PY      Path to the Python runner script
+	  GOOGLE_API_KEY       Google Gemini API key
+	  GEMINI_API_KEY       Alias for GOOGLE_API_KEY
+	  ANTHROPIC_API_KEY    Anthropic Claude API key
+	  OPENAI_API_KEY       OpenAI API key
+	`)
 	}
 
 	flag.Parse()
@@ -77,6 +79,18 @@ Environment Variables:
 		os.Exit(1)
 	}
 
+	runnerScript := *runnerFlag
+	if runnerScript == "" {
+		runnerScript = os.Getenv("SKILL_RUNNER_PY")
+	}
+	if runnerScript != "" {
+		runnerScript, err = filepath.Abs(runnerScript)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to resolve runner path: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	// Create a timestamped workspace directory
 	workspacePath := filepath.Join(baseWorkspace, fmt.Sprintf("run-%s-%s", *skillNameFlag, time.Now().Format("20060102-150405")))
 
@@ -86,6 +100,7 @@ Environment Variables:
 		Prompt:        *promptFlag,
 		Model:         *modelFlag,
 		Debug:         *debugFlag,
+		RunnerScript:  runnerScript,
 		WorkspacePath: workspacePath,
 		BaseWorkspace: baseWorkspace,
 		DataDir:       *dataFlag,

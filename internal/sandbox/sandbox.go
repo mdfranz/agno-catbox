@@ -3,7 +3,9 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +23,10 @@ type Runner struct {
 	Prompt        string
 	Model         string
 	Debug         bool
+	RunnerScript  string
 }
+
+var errNamespaceBootstrap = errors.New("namespace sandbox bootstrap failed")
 
 // Run executes the skill inside a sandbox.
 // It attempts full namespace isolation (user + mount + PID namespaces).
@@ -29,7 +34,14 @@ type Runner struct {
 // restriction with process group controls.
 func (r *Runner) Run(ctx context.Context) error {
 	if NamespacesAvailable() {
-		return r.runWithNamespaces(ctx)
+		if err := r.runWithNamespaces(ctx); err == nil {
+			return nil
+		} else if errors.Is(err, errNamespaceBootstrap) {
+			fmt.Fprintf(os.Stderr, "Warning: namespace isolation failed, falling back to PATH restriction only: %v\n", err)
+			return r.runWithoutNamespaces(ctx)
+		} else {
+			return err
+		}
 	}
 	fmt.Fprintf(os.Stderr, "Warning: namespace isolation unavailable, falling back to PATH restriction only\n")
 	return r.runWithoutNamespaces(ctx)
@@ -38,13 +50,14 @@ func (r *Runner) Run(ctx context.Context) error {
 // runWithNamespaces uses the re-exec pattern with CLONE_NEWUSER + CLONE_NEWNS + CLONE_NEWPID
 // to run the command inside a minimal rootfs with only allowed binaries visible.
 func (r *Runner) runWithNamespaces(ctx context.Context) error {
-	// Find runner.py
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
-	execDir := filepath.Dir(execPath)
-	runnerPyPath := filepath.Join(execDir, "runner.py")
+	runnerPyPath, err := resolveRunnerScriptPath(r.RunnerScript, execPath)
+	if err != nil {
+		return err
+	}
 
 	absSkillDir, err := filepath.Abs(r.SkillConfig.Dir)
 	if err != nil {
@@ -74,9 +87,9 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	env := SetupEnvironment()
 	// Inside the namespace, PATH points to /bin (where we symlinked allowed commands)
 	env.Values["PATH"] = "/bin:/usr/bin"
-	
+
 	pythonBin := "/bin/python3"
-	
+
 	// Check if the base workspace has a virtual environment.
 	venvPath := filepath.Join(r.BaseWorkspace, ".venv")
 	venvPython := filepath.Join(venvPath, "bin", "python3")
@@ -143,8 +156,18 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 		return fmt.Errorf("failed to get self executable: %w", err)
 	}
 
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("failed to create readiness pipe: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, selfExe)
-	cmd.Env = append(envList, childEnvKey+"="+string(configJSON))
+	cmd.Env = append(
+		envList,
+		childEnvKey+"="+string(configJSON),
+		childReadyEnvKey+"=3",
+	)
+	cmd.ExtraFiles = []*os.File{readyW}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Dir = r.WorkspacePath
@@ -154,10 +177,24 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 		Pdeathsig: syscall.SIGKILL,
 	}
 	if err := SetupNamespaces(cmd.SysProcAttr); err != nil {
-		return fmt.Errorf("failed to setup namespaces: %w", err)
+		readyW.Close()
+		return fmt.Errorf("%w: failed to setup namespaces: %w", errNamespaceBootstrap, err)
 	}
 
-	return r.startAndWait(ctx, cmd)
+	if err := cmd.Start(); err != nil {
+		readyW.Close()
+		return fmt.Errorf("%w: failed to start namespaced process: %w", errNamespaceBootstrap, err)
+	}
+	readyW.Close()
+
+	cleanup := r.attachCgroup(cmd)
+	defer cleanup()
+
+	if err := waitForNamespaceReady(ctx, cmd, readyR, r.SkillConfig.ParsedTimeout); err != nil {
+		return err
+	}
+
+	return r.waitForCompletion(ctx, cmd)
 }
 
 // runWithoutNamespaces is the fallback when user namespaces are unavailable.
@@ -167,8 +204,10 @@ func (r *Runner) runWithoutNamespaces(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
-	execDir := filepath.Dir(execPath)
-	runnerPyPath := filepath.Join(execDir, "runner.py")
+	runnerPyPath, err := resolveRunnerScriptPath(r.RunnerScript, execPath)
+	if err != nil {
+		return err
+	}
 
 	absSkillDir, err := filepath.Abs(r.SkillConfig.Dir)
 	if err != nil {
@@ -223,33 +262,39 @@ func (r *Runner) runWithoutNamespaces(ctx context.Context) error {
 		Pdeathsig: syscall.SIGKILL,
 	}
 
-	return r.startAndWait(ctx, cmd)
-}
-
-// startAndWait starts a command, optionally applies cgroup limits, and
-// waits for completion with timeout. Kills the process group on timeout.
-func (r *Runner) startAndWait(ctx context.Context, cmd *exec.Cmd) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start process: %w", err)
 	}
 
-	// Try to set cgroup limits after process starts
-	var cgroupPath string
-	if cmd.Process != nil {
-		cgroupConfig := GetDefaultCgroupConfig(
-			r.SkillConfig.ParsedMemory,
-			int(r.SkillConfig.ParsedTimeout.Seconds()),
-		)
-		var err error
-		cgroupPath, err = cgroupConfig.CreateCgroupV2(cmd.Process.Pid)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: cgroup resource limits not enforced: %v\n", err)
-		}
-		if cgroupPath != "" {
-			defer CleanupCgroup(cgroupPath)
-		}
+	cleanup := r.attachCgroup(cmd)
+	defer cleanup()
+
+	return r.waitForCompletion(ctx, cmd)
+}
+
+func (r *Runner) attachCgroup(cmd *exec.Cmd) func() {
+	if cmd.Process == nil {
+		return func() {}
 	}
 
+	cgroupConfig := GetDefaultCgroupConfig(
+		r.SkillConfig.ParsedMemory,
+		int(r.SkillConfig.ParsedTimeout.Seconds()),
+	)
+	cgroupPath, err := cgroupConfig.CreateCgroupV2(cmd.Process.Pid)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cgroup resource limits not enforced: %v\n", err)
+		return func() {}
+	}
+
+	return func() {
+		if cgroupPath != "" {
+			_ = CleanupCgroup(cgroupPath)
+		}
+	}
+}
+
+func (r *Runner) waitForCompletion(ctx context.Context, cmd *exec.Cmd) error {
 	doneChan := make(chan error, 1)
 	go func() {
 		doneChan <- cmd.Wait()
@@ -270,6 +315,80 @@ func (r *Runner) startAndWait(ctx context.Context, cmd *exec.Cmd) error {
 		<-doneChan
 		return ctx.Err()
 	}
+}
+
+func waitForNamespaceReady(ctx context.Context, cmd *exec.Cmd, readyR *os.File, timeout time.Duration) error {
+	defer readyR.Close()
+
+	readyChan := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1)
+		n, err := readyR.Read(buf)
+		switch {
+		case err == nil && n == 1 && buf[0] == '1':
+			readyChan <- nil
+		case err == io.EOF:
+			readyChan <- errNamespaceBootstrap
+		case err != nil:
+			readyChan <- fmt.Errorf("failed waiting for namespace readiness: %w", err)
+		default:
+			readyChan <- fmt.Errorf("invalid readiness signal from namespace child")
+		}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case err := <-readyChan:
+		if err == nil {
+			return nil
+		}
+		waitErr := cmd.Wait()
+		if errors.Is(err, errNamespaceBootstrap) {
+			return fmt.Errorf("%w: %v", errNamespaceBootstrap, waitErr)
+		}
+		return fmt.Errorf("namespace readiness failed: %w", err)
+	case <-timer.C:
+		killProcessGroup(cmd.Process.Pid)
+		<-waitForExit(cmd)
+		return fmt.Errorf("skill execution timed out after %s", timeout)
+	case <-ctx.Done():
+		killProcessGroup(cmd.Process.Pid)
+		<-waitForExit(cmd)
+		return ctx.Err()
+	}
+}
+
+func waitForExit(cmd *exec.Cmd) <-chan error {
+	doneChan := make(chan error, 1)
+	go func() {
+		doneChan <- cmd.Wait()
+	}()
+	return doneChan
+}
+
+func resolveRunnerScriptPath(configuredPath, executablePath string) (string, error) {
+	if configuredPath != "" {
+		info, err := os.Stat(configuredPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to access runner script %q: %w", configuredPath, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("runner script %q is a directory", configuredPath)
+		}
+		return configuredPath, nil
+	}
+
+	adjacentPath := filepath.Join(filepath.Dir(executablePath), "runner.py")
+	info, err := os.Stat(adjacentPath)
+	if err != nil {
+		return "", fmt.Errorf("runner.py not found next to the binary; pass -runner or set SKILL_RUNNER_PY")
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("runner.py next to the binary is a directory; pass -runner or set SKILL_RUNNER_PY")
+	}
+	return adjacentPath, nil
 }
 
 // killProcessGroup sends SIGKILL to the entire process group.

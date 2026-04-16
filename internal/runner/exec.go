@@ -15,6 +15,7 @@ type Config struct {
 	Prompt        string
 	Model         string
 	Debug         bool
+	RunnerScript  string
 	WorkspacePath string
 	BaseWorkspace string
 	DataDir       string
@@ -48,6 +49,7 @@ func RunSkill(ctx context.Context, config Config) error {
 		Prompt:        config.Prompt,
 		Model:         config.Model,
 		Debug:         config.Debug,
+		RunnerScript:  config.RunnerScript,
 	}
 
 	return runner.Run(ctx)

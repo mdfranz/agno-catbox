@@ -62,18 +62,20 @@ Optionally add a `skills/my-analyst/SKILL.md` with detailed instructions for the
 uv run ./skill-runner \
   -skill my-analyst \
   -prompt "Analyze the data.json file" \
+  -runner ./runner.py \
   -workspace ~/my-analysis
 ```
 
-The `uv run` prefix ensures the workspace's virtual environment is activated.
+The `uv run` prefix ensures the workspace's virtual environment is activated. If you install the binary elsewhere, keep passing `-runner /path/to/runner.py` or set `SKILL_RUNNER_PY`.
 
 ## 6. What happens
 
 1. The Go binary loads the skill config
-2. If user namespaces are available: creates a minimal rootfs with only allowed binaries, bind-mounts the workspace, and runs the agent inside an isolated mount namespace
-3. If not: restricts PATH to a symlink directory with only allowed commands
-4. The Agno agent (runner.py) loads the skill instructions and runs with the Gemini model
-5. Output goes to stdout; generated scripts are retained in the workspace
+2. Resolves the Python runner from `-runner`, `SKILL_RUNNER_PY`, or `runner.py` next to the binary
+3. If user namespaces are available: creates a minimal rootfs with only allowed binaries, bind-mounts the workspace, and runs the agent inside an isolated mount namespace
+4. If namespace bootstrap is unavailable or fails before the runner starts: restricts PATH to a symlink directory with only allowed commands
+5. The Agno agent (runner.py) loads the skill instructions and runs with the Gemini model
+6. Output goes to stdout; generated scripts are retained in the workspace
 
 ## Verification
 
@@ -97,6 +99,7 @@ sudo sysctl -w kernel.unprivileged_userns_clone=1
 
 **"namespace isolation unavailable"**
 - Your kernel doesn't support unprivileged user namespaces
+- Or namespace bootstrap failed before the Python runner started
 - The runner still works but with reduced isolation (PATH restriction only)
 
 **"Error executing agent: API_KEY"**
