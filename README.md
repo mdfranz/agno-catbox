@@ -77,27 +77,23 @@ The generated analysis scripts and Parquet files are retained in the workspace f
 
 ## Security Model
 
-See [DESIGN.md](DESIGN.md) for the full security architecture.
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md) for the full architecture and design details. The short version: this tool prevents the agent from accidentally reading host credentials; it does **not** provide strong containment.
 
-**With namespace isolation** (default on supported kernels):
-- The agent process runs inside a separate user, mount, and PID namespace
-- Filesystem is restricted to a minimal rootfs, but the host's `/usr` directory is bind-mounted (read-only) along with the workspace (read-write).
-- Host home directories, SSH keys, and system configs are not accessible
-- The old root is unmounted after pivot_root
+**What namespace isolation actually gives you:**
+- Host home directories, SSH keys, and `/etc/` are not visible after `pivot_root`
+- Environment is filtered to API keys only — `HOME`, `USER`, `SSH_AUTH_SOCK`, etc. are stripped
+- PID namespace — agent only sees its own processes
 
-**Without namespace isolation** (fallback):
-- PATH is restricted via a symlink directory containing only allowed binaries
-- Environment variables are filtered to only API keys
-- Process group isolation ensures timeout kills all subprocesses
-- The agent can still read host filesystem paths if it uses absolute paths directly
+**What it does not prevent:**
+- **Network**: No network namespace. The agent has full outbound access.
+- **Binary access**: The full host `/usr` tree is bind-mounted read-only. Any binary in `/usr/bin` is reachable by absolute path regardless of `allowed_commands`.
+- **`allowed_commands` enforcement**: This list controls symlinks in `/bin` but does not block access to the same binaries via `/usr/bin/...`. Treat it as documentation, not a security boundary.
+- **Resource limits**: cgroups v2 limits require a writable `/sys/fs/cgroup`. This silently fails on many systems (containers, some VMs). The skill timeout is the only guaranteed bound.
 
-Fallback is used both when namespaces are unavailable and when namespace bootstrap fails before the Python runner starts.
-
-**Always applied:**
-- Environment variable filtering (only API keys pass through)
-- Process group controls (Setpgid + SIGKILL on timeout)
-- Pdeathsig ensures child dies if parent exits
-- cgroups v2 resource limits (memory, CPU) when available
+**Fallback mode** (when namespaces are unavailable or bootstrap fails):
+- PATH is restricted to allowed commands only
+- The agent can still access the full host filesystem via absolute paths
+- Environment is still filtered to API keys
 
 ## Project Structure
 
