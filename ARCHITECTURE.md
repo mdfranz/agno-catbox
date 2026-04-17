@@ -1,6 +1,8 @@
 # Architecture: Agno Skill Runner
 
-The Agno Skill Runner is a secure execution environment for LLM-based agents. It combines a high-level orchestration layer in Go with a sandboxed Python execution environment using Linux namespaces.
+The Agno Skill Runner is a namespace-based isolation tool for running LLM-based agents. It combines a Go orchestrator with a sandboxed Python execution environment.
+
+**Status**: Version 1.0, initial implementation (April 2026). This design has not been evaluated by external security researchers or tested against adversarial agents. Use for execution isolation in trusted environments, not for containing untrusted code.
 
 ## System Overview
 
@@ -66,15 +68,15 @@ The Python runner is the bridge between the sandbox and the Agno framework:
 -   **Tool Provisioning**: Configures `ShellTools` and `PythonTools` for the agent.
 -   **Instruction Injection**: Loads agent persona and system instructions from `SKILL.md`.
 
-## Security Model
+## Security Model (Attempted vs. Guaranteed)
 
-| Feature | Enforcement | Description |
-| :--- | :--- | :--- |
-| **Credential Protection** | Environment Filtering | Strips `HOME`, `SSH_AUTH_SOCK`, etc. Only whitelisted API keys are passed. |
-| **Filesystem Isolation** | Mount Namespaces | `pivot_root` hides host sensitive directories. |
-| **Command Whitelisting** | PATH Restriction | Only symlinked binaries in `/bin` are easily accessible. |
-| **Resource Limits** | Cgroups v2 | Hard limits on RAM and CPU usage. |
-| **Reliable Cleanup** | PGID Killing | `SIGKILL` sent to the entire process group on timeout or exit. |
+| Feature | Mechanism | Status | Notes |
+| :--- | :--- | :--- | :--- |
+| **Credential Protection** | Environment Filtering | ✓ Guaranteed | Strips `HOME`, `SSH_AUTH_SOCK`, etc. Only API keys are passed. Works in all modes. |
+| **Filesystem Isolation** | Mount Namespaces | ⚠️ Namespace-mode only | `pivot_root` hides host home/root/etc. Fails back to open access if namespace unavailable. |
+| **Command Whitelisting** | PATH Restriction | ✗ Easily bypassed | Symlinks prevent accidental tool use; agent can still invoke `/usr/bin/X` by absolute path. Treat as documentation. |
+| **Resource Limits** | Cgroups v2 | ⚠️ Best-effort | Fails silently on containers & many VMs. Timeout is the only guaranteed limit. |
+| **Process Cleanup** | Process Groups + SIGKILL | ✓ Guaranteed | All subprocesses killed on timeout or exit. Works in all modes. |
 
 ## Data Flow
 1.  **Input**: User prompt and skill name via CLI.

@@ -17,16 +17,26 @@ go build -o skill-runner ./cmd/skill-runner
 
 ## 3. Prepare a workspace
 
-The workspace is where the agent operates. It needs Python dependencies installed:
+The workspace is where the agent operates. It needs Python dependencies installed. Choose one approach:
 
+**Option A: Persistent venv (recommended)**
 ```bash
 mkdir -p ~/my-analysis
 cd ~/my-analysis
 cp /path/to/your/data.json .
 
 # Create Python environment with Agno dependencies
-uv venv && source .venv/bin/activate
+uv venv
 uv pip install agno pyyaml google-genai google-generativeai polars orjson
+source .venv/bin/activate
+```
+
+**Option B: uv run (temporary venv per execution)**
+```bash
+mkdir -p ~/my-analysis
+cd ~/my-analysis
+cp /path/to/your/data.json .
+# Dependencies will be installed via uv run in step 5
 ```
 
 ## 4. Create a skill
@@ -57,25 +67,37 @@ Optionally add a `skills/my-analyst/SKILL.md` with detailed instructions for the
 
 ## 5. Run
 
+**If you used Option A (persistent venv)**:
 ```bash
-# Run from the repo directory (where skill-runner binary is)
-uv run ./skill-runner \
+source ~/my-analysis/.venv/bin/activate
+./skill-runner \
   -skill my-analyst \
   -prompt "Analyze the data.json file" \
   -runner ./runner.py \
   -workspace ~/my-analysis
 ```
 
-The `uv run` prefix ensures the workspace's virtual environment is activated. If you install the binary elsewhere, keep passing `-runner /path/to/runner.py` or set `SKILL_RUNNER_PY`.
+**If you used Option B (uv run)**:
+```bash
+cd ~/my-analysis
+uv run -p agno,pyyaml,google-genai,google-generativeai,polars,orjson \
+  /path/to/skill-runner \
+  -skill my-analyst \
+  -prompt "Analyze the data.json file" \
+  -runner /path/to/runner.py \
+  -workspace .
+```
+
+If you install the binary elsewhere, keep passing `-runner /path/to/runner.py` or set `SKILL_RUNNER_PY`.
 
 ## 6. What happens
 
-1. The Go binary loads the skill config
+1. The Go binary loads the skill config from `skill.yaml`
 2. Resolves the Python runner from `-runner`, `SKILL_RUNNER_PY`, or `runner.py` next to the binary
-3. If user namespaces are available: creates a minimal rootfs with only allowed binaries, bind-mounts the workspace, and runs the agent inside an isolated mount namespace
-4. If namespace bootstrap is unavailable or fails before the runner starts: restricts PATH to a symlink directory with only allowed commands
-5. The Agno agent (runner.py) loads the skill instructions and runs with the Gemini model
-6. Output goes to stdout; generated scripts are retained in the workspace
+3. **Namespace mode** (if available): Creates a minimal rootfs with only allowed binaries, bind-mounts the workspace, and runs the agent inside isolated namespaces (user + mount + PID). The agent sees `/usr` (read-only), `/lib` (read-only), and `/workspace` (read-write).
+4. **Fallback mode** (if namespaces unavailable or bootstrap fails): Restricts PATH to a symlink directory with only allowed commands. The agent has access to the full host filesystem via absolute paths, but API keys and home directories are still filtered.
+5. The Agno agent (runner.py) loads skill instructions and runs with the LLM model
+6. Output goes to stdout; generated scripts and logs are retained in the workspace
 
 ## Verification
 

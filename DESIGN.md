@@ -1,15 +1,19 @@
 # Design & Architecture
 
+**Status**: Version 1.0 design document. This has not been audited by security professionals or tested at scale.
+
 ## Overview
 
-The Agno Skill Runner is a Go binary that executes a Python-based Agno runner inside a sandboxed Linux process. It uses unprivileged Linux namespaces for filesystem isolation, symlink-based PATH restriction for command whitelisting, cgroups v2 for resource limits, and process group controls for reliable cleanup.
+The Agno Skill Runner is a Go binary that executes a Python-based Agno runner inside a Linux namespace sandbox. It uses unprivileged Linux namespaces for filesystem isolation, symlink-based PATH restriction, cgroups v2 for resource limits, and process group controls for process cleanup.
 
-## Design Goals
+## Design Intentions
 
-1. **Credential protection**: The agent process cannot see host home directories, SSH keys, or system config files
+1. **Credential protection**: The agent process should not see host home directories, SSH keys, or system config files
 2. **No root required**: Uses unprivileged user namespaces — no Docker, no setuid, no capabilities
-3. **Defense in depth**: Multiple independent layers so failure of one doesn't compromise all security
+3. **Layered approach**: Multiple independent controls so a failure in one mechanism doesn't break all isolation
 4. **Graceful degradation**: Falls back to reduced isolation on systems without namespace support
+
+**Status**: These intentions are implemented in v1.0, but the system has not been battle-tested. Layer 2 (command whitelisting) is easily bypassed via absolute paths; cgroups v2 silently fails on many systems; and the overall isolation strength has not been validated against real attacks.
 
 > **What this is not**: A strong security container. Network access is unrestricted, the full host `/usr` tree is visible inside the sandbox, and `allowed_commands` cannot enforce command whitelisting in namespace mode (see Layer 2). The primary value is preventing accidental credential exposure, not containing an adversarial agent.
 
