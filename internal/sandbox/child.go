@@ -100,6 +100,13 @@ func signalChildReady() error {
 }
 
 func setupMountsAndPivot(config ChildConfig) error {
+	// Make the mount namespace private. This ensures that any mounts done
+	// inside this namespace do not propagate back to the host, even if
+	// the host has shared mount points.
+	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("make mount namespace private: %w", err)
+	}
+
 	rootfs := config.RootFSPath
 
 	// Make the rootfs a mount point (required for pivot_root).

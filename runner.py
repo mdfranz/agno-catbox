@@ -58,13 +58,16 @@ def main():
     # Use instructions from SKILL.md if available
     instructions = config.get("instructions_md", config.get("description", "You are a security analyst."))
 
+    if debug:
+        print(f"DEBUG: Current working directory: {os.getcwd()}", file=sys.stderr)
+
     # Initialize the Agno Agent
     agent = Agent(
         model=Gemini(id=model_id),
         instructions=[instructions],
         tools=[
-            PythonTools(),
-            ShellTools()
+            PythonTools(base_dir=os.getcwd()),
+            ShellTools(base_dir=os.getcwd())
         ],
         markdown=True,
     )

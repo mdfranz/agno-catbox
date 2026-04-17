@@ -4,3 +4,4 @@ skill-runner
 __pycache__/
 *.test
 eve.json
+data/
