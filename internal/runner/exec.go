@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/mdfranz/skill-runner/internal/sandbox"
 	"github.com/mdfranz/skill-runner/internal/skill"
@@ -10,15 +11,16 @@ import (
 
 // Config holds the configuration for running a skill
 type Config struct {
-	SkillName     string
-	SkillDir      string
-	Prompt        string
-	Model         string
-	Debug         bool
-	RunnerScript  string
-	WorkspacePath string
-	BaseWorkspace string
-	DataDir       string
+	SkillName      string
+	SkillDir       string
+	Prompt         string
+	Model          string
+	Debug          bool
+	RunnerScript   string
+	WorkspacePath  string
+	BaseWorkspace  string
+	DataDir        string
+	ChildLogWriter io.Writer // when set, child stderr is tee'd here in addition to the terminal
 }
 
 // RunSkill executes a skill with the given configuration
@@ -43,13 +45,14 @@ func RunSkill(ctx context.Context, config Config) error {
 
 	// Create and run the sandbox
 	runner := &sandbox.Runner{
-		SkillConfig:   skillConfig,
-		WorkspacePath: config.WorkspacePath,
-		BaseWorkspace: config.BaseWorkspace,
-		Prompt:        config.Prompt,
-		Model:         config.Model,
-		Debug:         config.Debug,
-		RunnerScript:  config.RunnerScript,
+		SkillConfig:    skillConfig,
+		WorkspacePath:  config.WorkspacePath,
+		BaseWorkspace:  config.BaseWorkspace,
+		Prompt:         config.Prompt,
+		Model:          config.Model,
+		Debug:          config.Debug,
+		RunnerScript:   config.RunnerScript,
+		ChildLogWriter: config.ChildLogWriter,
 	}
 
 	return runner.Run(ctx)

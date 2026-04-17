@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,8 +11,19 @@ import (
 	"github.com/mdfranz/skill-runner/internal/runner"
 	"github.com/mdfranz/skill-runner/internal/sandbox"
 	"github.com/mdfranz/skill-runner/internal/skill"
+	"github.com/spf13/cobra"
 )
 
+var (
+        skillName  string
+        prompt     string
+        model      string
+        debug      bool
+        runnerPath string
+        workspace  string
+        dataDir    string
+        runName    string
+)
 func main() {
 	// If we're a re-exec'd sandbox child, run the mount setup + exec path.
 	// This never returns on success (it exec's the real command).
@@ -21,96 +32,102 @@ func main() {
 		os.Exit(126) // only reached if RunChild fails without calling os.Exit
 	}
 
-	// Normal CLI entry point
-	skillNameFlag := flag.String("skill", "", "Name of the skill to run (required)")
-	promptFlag := flag.String("prompt", "", "The prompt/task for the skill (required)")
-	modelFlag := flag.String("model", "gemini-2.5-flash", "LLM model to use")
-	debugFlag := flag.Bool("debug", false, "Enable debug logging")
-	runnerFlag := flag.String("runner", "", "Path to runner.py (default: SKILL_RUNNER_PY or runner.py next to the binary)")
-	workspaceFlag := flag.String("workspace", ".", "Path to the base workspace directory")
-	dataFlag := flag.String("data", "", "Path to a data directory to copy into the workspace")
+	rootCmd := &cobra.Command{
+		Use:   "skill-runner",
+		Short: "Run Agno skills in a sandboxed environment with namespace isolation",
+		Long: `Run Agno skills in a sandboxed environment with namespace isolation.
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, `Usage: skill-runner [OPTIONS]
+Environment Variables:
+  SKILL_RUNNER_PY      Path to the Python runner script
+  GOOGLE_API_KEY       Google Gemini API key
+  GEMINI_API_KEY       Alias for GOOGLE_API_KEY
+  ANTHROPIC_API_KEY    Anthropic Claude API key
+  OPENAI_API_KEY       OpenAI API key`,
+                Example: `  skill-runner --skill suricata-analyst --prompt "Analyze eve.json"
+  skill-runner --skill suricata-analyst --prompt "..." --model gemini-3.1-flash-lite-preview
+  skill-runner --skill my-skill --prompt "Run analysis" --debug --workspace /data/workspace
+  skill-runner --skill suricata-analyst --prompt "Analyze data" --data ./my-data
+  skill-runner --skill suricata-analyst --prompt "Analyze again" --run-name my-analysis`,		RunE: func(cmd *cobra.Command, args []string) error {
+			skillDir, err := skill.FindSkillDir(skillName)
+			if err != nil {
+				return fmt.Errorf("skill directory not found: %w", err)
+			}
 
-Run Agno skills in a sandboxed environment with namespace isolation.
+			baseWorkspace, err := filepath.Abs(workspace)
+			if err != nil {
+				return fmt.Errorf("failed to resolve workspace path: %w", err)
+			}
 
-Options:
-`)
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, `
-Examples:
-  skill-runner -skill suricata-analyst -prompt "Analyze eve.json"
-  skill-runner -skill suricata-analyst -prompt "..." -model gemini-2.5-flash
-  skill-runner -skill my-skill -prompt "Run analysis" -debug -workspace /data/workspace
-  skill-runner -skill suricata-analyst -prompt "Analyze data" -data ./my-data
+			// Initialize structured logging
+			logPath := filepath.Join(baseWorkspace, "skill-runner.log")
+			logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return fmt.Errorf("failed to open log file %s: %w", logPath, err)
+			}
+			defer logFile.Close()
 
-	Environment Variables:
-	  SKILL_RUNNER_PY      Path to the Python runner script
-	  GOOGLE_API_KEY       Google Gemini API key
-	  GEMINI_API_KEY       Alias for GOOGLE_API_KEY
-	  ANTHROPIC_API_KEY    Anthropic Claude API key
-	  OPENAI_API_KEY       OpenAI API key
-	`)
+			logLevel := slog.LevelInfo
+			if debug {
+				logLevel = slog.LevelDebug
+			}
+
+			logger := slog.New(slog.NewJSONHandler(logFile, &slog.HandlerOptions{Level: logLevel}))
+			slog.SetDefault(logger)
+
+			runnerScript := runnerPath
+			if runnerScript == "" {
+				runnerScript = os.Getenv("SKILL_RUNNER_PY")
+			}
+			if runnerScript != "" {
+				runnerScript, err = filepath.Abs(runnerScript)
+				if err != nil {
+					return fmt.Errorf("failed to resolve runner path: %w", err)
+				}
+			}
+
+			// Determine workspace directory name
+			var workspacePath string
+			if runName != "" {
+			        workspacePath = filepath.Join(baseWorkspace, runName)
+			} else {
+			        workspacePath = filepath.Join(baseWorkspace, fmt.Sprintf("run-%s-%s", skillName, time.Now().Format("20060102-150405")))
+			}
+			var childLogWriter *os.File
+			if debug {
+				childLogWriter = logFile
+			}
+			config := runner.Config{
+				SkillName:      skillName,
+				SkillDir:       skillDir,
+				Prompt:         prompt,
+				Model:          model,
+				Debug:          debug,
+				RunnerScript:   runnerScript,
+				WorkspacePath:  workspacePath,
+				BaseWorkspace:  baseWorkspace,
+				DataDir:        dataDir,
+				ChildLogWriter: childLogWriter,
+			}
+
+			slog.Info("using workspace", "path", workspacePath)
+
+			ctx := context.Background()
+			return runner.RunSkill(ctx, config)
+		},
 	}
+	rootCmd.Flags().StringVarP(&skillName, "skill", "s", "", "Name of the skill to run (required)")
+	rootCmd.Flags().StringVarP(&prompt, "prompt", "p", "", "The prompt/task for the skill (required)")
+	rootCmd.Flags().StringVarP(&model, "model", "m", "gemini-3.1-flash-lite-preview", "LLM model to use")
+	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
+	rootCmd.Flags().StringVarP(&runnerPath, "runner", "r", "", "Path to runner.py (default: SKILL_RUNNER_PY or runner.py next to the binary)")
+	rootCmd.Flags().StringVarP(&workspace, "workspace", "w", ".", "Path to the base workspace directory")
+	rootCmd.Flags().StringVar(&runName, "run-name", "", "Human-readable name for the run workspace (allows reuse)")
+	rootCmd.Flags().StringVarP(&dataDir, "data", "d", "", "Path to a data directory to copy into the workspace")
 
-	flag.Parse()
+	_ = rootCmd.MarkFlagRequired("skill")
+	_ = rootCmd.MarkFlagRequired("prompt")
 
-	if *skillNameFlag == "" {
-		fmt.Fprintf(os.Stderr, "Error: -skill flag is required\n")
-		flag.Usage()
-		os.Exit(1)
-	}
-	if *promptFlag == "" {
-		fmt.Fprintf(os.Stderr, "Error: -prompt flag is required\n")
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	skillDir, err := skill.FindSkillDir(*skillNameFlag)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	baseWorkspace, err := filepath.Abs(*workspaceFlag)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to resolve workspace path: %v\n", err)
-		os.Exit(1)
-	}
-
-	runnerScript := *runnerFlag
-	if runnerScript == "" {
-		runnerScript = os.Getenv("SKILL_RUNNER_PY")
-	}
-	if runnerScript != "" {
-		runnerScript, err = filepath.Abs(runnerScript)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to resolve runner path: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	// Create a timestamped workspace directory
-	workspacePath := filepath.Join(baseWorkspace, fmt.Sprintf("run-%s-%s", *skillNameFlag, time.Now().Format("20060102-150405")))
-
-	config := runner.Config{
-		SkillName:     *skillNameFlag,
-		SkillDir:      skillDir,
-		Prompt:        *promptFlag,
-		Model:         *modelFlag,
-		Debug:         *debugFlag,
-		RunnerScript:  runnerScript,
-		WorkspacePath: workspacePath,
-		BaseWorkspace: baseWorkspace,
-		DataDir:       *dataFlag,
-	}
-
-	fmt.Printf("Using workspace: %s\n", workspacePath)
-
-	ctx := context.Background()
-	if err := runner.RunSkill(ctx, config); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }

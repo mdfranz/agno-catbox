@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"syscall"
 )
@@ -12,6 +13,7 @@ func NamespacesAvailable() bool {
 	// Check the sysctl that controls unprivileged user namespace creation.
 	// If the file doesn't exist, the kernel doesn't gate it (older kernels allow it).
 	// If it exists and contains "0", user namespaces are disabled for unprivileged users.
+	slog.Debug("os: ReadFile", "path", "/proc/sys/kernel/unprivileged_userns_clone")
 	data, err := os.ReadFile("/proc/sys/kernel/unprivileged_userns_clone")
 	if err != nil {
 		// File doesn't exist — either the kernel doesn't have this sysctl (namespaces
