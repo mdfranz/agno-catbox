@@ -66,8 +66,8 @@ def main():
         model=Gemini(id=model_id),
         instructions=[instructions],
         tools=[
-            PythonTools(base_dir=os.getcwd()),
-            ShellTools(base_dir=os.getcwd())
+            PythonTools(base_dir=Path.cwd()),
+            ShellTools(base_dir=Path.cwd())
         ],
         markdown=True,
     )

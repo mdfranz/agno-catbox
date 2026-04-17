@@ -118,7 +118,7 @@ skills/                           Skill definitions
 # Usage
 
 ```
- ./skill-runner -m gemini-3.1-pro-preview  -w ./runs -s suricata-analyst -p "Find malicious activity" -d data --debug
+ ./skill-runner -m gemini-3.1-pro-preview  -w ./runs -s suricata-analyst -p "Find interesting hosts based on TLS traffic" -d data --debug
 ```
 
 
