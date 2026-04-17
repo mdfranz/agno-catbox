@@ -115,6 +115,13 @@ runner.py                         Python/Agno agent orchestrator
 skills/                           Skill definitions
 ```
 
+# Usage
+
+```
+ ./skill-runner -m gemini-3.1-pro-preview  -w ./runs -s suricata-analyst -p "Find malicious activity" -d data --debug
+```
+
+
 ## License
 
 See repository root.
