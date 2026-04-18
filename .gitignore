@@ -1,5 +1,6 @@
 runs/
 skill-runner
+skill-runner.log
 .venv/
 __pycache__/
 *.test
