@@ -197,7 +197,7 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	        childReadyEnvKey+"=3",
 	)
 	cmd.ExtraFiles = []*os.File{readyW}
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = r.childStdout()
 	cmd.Stderr = r.childStderr()
 	cmd.Dir = r.WorkspacePath
 
@@ -282,7 +282,7 @@ func (r *Runner) runWithoutNamespaces(ctx context.Context) error {
 	}
 	cmd.Env = env.ToEnv()
 	cmd.Dir = r.WorkspacePath
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = r.childStdout()
 	cmd.Stderr = r.childStderr()
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -444,6 +444,14 @@ func killProcessGroup(pid int) {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	slog.Debug("syscall: kill", "pid", pid, "sig", "SIGKILL")
 	_ = syscall.Kill(pid, syscall.SIGKILL)
+}
+
+// childStdout returns the writer to use for the child process's stdout.
+func (r *Runner) childStdout() io.Writer {
+	if r.ChildLogWriter == nil {
+		return os.Stdout
+	}
+	return io.MultiWriter(os.Stdout, r.ChildLogWriter)
 }
 
 // childStderr returns the writer to use for the child process's stderr.

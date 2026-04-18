@@ -60,13 +60,14 @@ def main():
 
     # Initialize the Agno Agent
     agent = Agent(
-        model=Gemini(id=model_id),
+        model=Gemini(id=model_id, thinking_budget=16000, include_thoughts=True),
         instructions=[instructions],
         tools=[
             PythonTools(base_dir=Path.cwd()),
             ShellTools(base_dir=Path.cwd())
         ],
         markdown=True,
+        reasoning=True,
     )
 
     # Run the agent

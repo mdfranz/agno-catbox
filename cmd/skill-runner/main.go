@@ -56,12 +56,24 @@ Environment Variables:
 			}
 
 			// Initialize structured logging
-			logPath := filepath.Join(baseWorkspace, "skill-runner.log")
+			var logPath string
+			if os.Getenv("LOG_CURRENT") != "" {
+				exePath, err := os.Executable()
+				if err != nil {
+					return fmt.Errorf("failed to get executable path for logging: %w", err)
+				}
+				logPath = filepath.Join(filepath.Dir(exePath), "skill-runner.log")
+			} else {
+				logPath = filepath.Join(baseWorkspace, "skill-runner.log")
+			}
+
 			logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				return fmt.Errorf("failed to open log file %s: %w", logPath, err)
 			}
 			defer logFile.Close()
+
+			fmt.Fprintf(os.Stderr, "Logging to: %s\n", logPath)
 
 			logLevel := slog.LevelInfo
 			if debug {
@@ -113,7 +125,7 @@ Environment Variables:
 				WorkspacePath:  workspacePath,
 				BaseWorkspace:  baseWorkspace,
 				DataDir:        dataDir,
-				ChildLogWriter: logFile,
+				ChildLogWriter: nil,
 			}
 
 			slog.Info("using workspace", "path", workspacePath)

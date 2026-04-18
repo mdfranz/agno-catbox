@@ -18,6 +18,6 @@ echo "Creating virtual environment using system python3..."
 uv venv -p /usr/bin/python3 "$VENV_DIR"
 
 echo "Installing dependencies..."
-VIRTUAL_ENV="$VENV_DIR" uv pip install agno pyyaml google-genai google-generativeai polars orjson
+VIRTUAL_ENV="$VENV_DIR" uv pip install agno pyyaml google-genai google-generativeai polars orjson openai
 
 echo "Environment prepared successfully in $VENV_DIR"
