@@ -58,9 +58,6 @@ def main():
     # Use instructions from SKILL.md if available
     instructions = config.get("instructions_md", config.get("description", "You are a security analyst."))
 
-    if debug:
-        print(f"DEBUG: Current working directory: {os.getcwd()}", file=sys.stderr)
-
     # Initialize the Agno Agent
     agent = Agent(
         model=Gemini(id=model_id),
@@ -74,7 +71,53 @@ def main():
 
     # Run the agent
     try:
-        agent.print_response(prompt)
+        from agno.run.agent import RunContentEvent, ReasoningContentDeltaEvent, ToolCallStartedEvent, ToolCallCompletedEvent, RunEvent
+        import json
+        
+        print("\n--- Agent Execution ---", file=sys.stderr)
+        for event in agent.run(prompt, stream=True):
+            # Handle streaming reasoning/thoughts
+            if isinstance(event, ReasoningContentDeltaEvent):
+                if event.reasoning_content:
+                    print(event.reasoning_content, end="", flush=True)
+            
+            # Handle streaming content or chunks
+            elif isinstance(event, RunContentEvent):
+                if event.reasoning_content:
+                    print(event.reasoning_content, end="", flush=True)
+                if event.content:
+                    print(event.content, end="", flush=True)
+            
+            # Handle tool calls to show generated code
+            elif isinstance(event, ToolCallStartedEvent):
+                if not event.tool:
+                    continue
+                tool_name = event.tool.tool_name
+                tool_args = event.tool.tool_args or {}
+                
+                print(f"\n\n[Action: {tool_name}]", flush=True)
+                
+                # Specifically extract code for Python tools
+                if tool_name in ["run_python_code", "save_to_file_and_run"]:
+                    code = tool_args.get("code") or tool_args.get("python_code")
+                    if code:
+                        print(f"--- Generated Code ---\n{code}\n----------------------", flush=True)
+                    else:
+                        print(f"Args: {json.dumps(tool_args)}", flush=True)
+                else:
+                    print(f"Args: {json.dumps(tool_args)}", flush=True)
+            
+            # Handle tool completion to show results
+            elif isinstance(event, ToolCallCompletedEvent):
+                if event.content:
+                    # Truncate very long results for readability
+                    result = str(event.content)
+                    if len(result) > 500:
+                        result = result[:500] + "... (truncated)"
+                    print(f"[Result: {result}]\n", flush=True)
+        
+        print("\n--- Execution Finished ---", file=sys.stderr)
+
     except Exception as e:
         print(f"Error executing agent: {e}", file=sys.stderr)
         if "API_KEY" in str(e).upper():

@@ -1,0 +1,6 @@
+{"time":"2026-04-18T12:05:04.065737698-04:00","level":"INFO","msg":"using workspace","path":"/home/mfranz/github/agno-catbox/run-suricata-analyst-20260418-120504"}
+{"time":"2026-04-18T12:05:04.066059273-04:00","level":"INFO","msg":"starting sandbox run","skill":"suricata-analyst","workspace":"/home/mfranz/github/agno-catbox/run-suricata-analyst-20260418-120504"}
+{"time":"2026-04-18T12:05:04.066126357-04:00","level":"INFO","msg":"sandbox mode: namespace isolation (user+mount+pid)"}
+{"time":"2026-04-18T12:05:34.232704358-04:00","level":"INFO","msg":"using workspace","path":"/home/mfranz/github/agno-catbox/run-suricata-analyst-20260418-120534"}
+{"time":"2026-04-18T12:05:34.233766963-04:00","level":"INFO","msg":"starting sandbox run","skill":"suricata-analyst","workspace":"/home/mfranz/github/agno-catbox/run-suricata-analyst-20260418-120534"}
+{"time":"2026-04-18T12:05:34.233822788-04:00","level":"INFO","msg":"sandbox mode: namespace isolation (user+mount+pid)"}

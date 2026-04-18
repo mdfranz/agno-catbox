@@ -12,6 +12,7 @@ import (
 
 // ChildConfig is serialized to an env var and passed to the re-exec'd child.
 type ChildConfig struct {
+	RunID         string       `json:"run_id"`
 	RootFSPath    string       `json:"rootfs_path"`
 	WorkspacePath string       `json:"workspace_path"`
 	Command       string       `json:"command"`
@@ -53,6 +54,9 @@ func RunChild() {
 		logLevel = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	if config.RunID != "" {
+		logger = logger.With("run_id", config.RunID)
+	}
 	slog.SetDefault(logger)
 
 	if err := setupMountsAndPivot(config); err != nil {

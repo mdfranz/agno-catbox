@@ -15,15 +15,16 @@ import (
 )
 
 var (
-        skillName  string
-        prompt     string
-        model      string
-        debug      bool
-        runnerPath string
-        workspace  string
-        dataDir    string
-        runName    string
+	skillName  string
+	prompt     string
+	model      string
+	debug      bool
+	runnerPath string
+	workspace  string
+	dataDir    string
+	runName    string
 )
+
 func main() {
 	// If we're a re-exec'd sandbox child, run the mount setup + exec path.
 	// This never returns on success (it exec's the real command).
@@ -43,16 +44,12 @@ Environment Variables:
   GEMINI_API_KEY       Alias for GOOGLE_API_KEY
   ANTHROPIC_API_KEY    Anthropic Claude API key
   OPENAI_API_KEY       OpenAI API key`,
-                Example: `  skill-runner --skill suricata-analyst --prompt "Analyze eve.json"
+		Example: `  skill-runner --skill suricata-analyst --prompt "Analyze eve.json"
   skill-runner --skill suricata-analyst --prompt "..." --model gemini-3.1-flash-lite-preview
   skill-runner --skill my-skill --prompt "Run analysis" --debug --workspace /data/workspace
   skill-runner --skill suricata-analyst --prompt "Analyze data" --data ./my-data
-  skill-runner --skill suricata-analyst --prompt "Analyze again" --run-name my-analysis`,		RunE: func(cmd *cobra.Command, args []string) error {
-			skillDir, err := skill.FindSkillDir(skillName)
-			if err != nil {
-				return fmt.Errorf("skill directory not found: %w", err)
-			}
-
+  skill-runner --skill suricata-analyst --prompt "Analyze again" --run-name my-analysis`,
+		RunE: func(cmd *cobra.Command, args []string) error {
 			baseWorkspace, err := filepath.Abs(workspace)
 			if err != nil {
 				return fmt.Errorf("failed to resolve workspace path: %w", err)
@@ -72,7 +69,19 @@ Environment Variables:
 			}
 
 			logger := slog.New(slog.NewJSONHandler(logFile, &slog.HandlerOptions{Level: logLevel}))
+			var loggerRunID string
+			if runName != "" {
+				loggerRunID = runName
+			} else {
+				loggerRunID = time.Now().Format("20060102-150405.000")
+			}
+			logger = logger.With("run_id", loggerRunID)
 			slog.SetDefault(logger)
+
+			skillDir, err := skill.FindSkillDir(skillName)
+			if err != nil {
+				return fmt.Errorf("skill directory not found: %w", err)
+			}
 
 			runnerScript := runnerPath
 			if runnerScript == "" {
@@ -88,15 +97,13 @@ Environment Variables:
 			// Determine workspace directory name
 			var workspacePath string
 			if runName != "" {
-			        workspacePath = filepath.Join(baseWorkspace, runName)
+				workspacePath = filepath.Join(baseWorkspace, runName)
 			} else {
-			        workspacePath = filepath.Join(baseWorkspace, fmt.Sprintf("run-%s-%s", skillName, time.Now().Format("20060102-150405")))
+				workspacePath = filepath.Join(baseWorkspace, fmt.Sprintf("run-%s-%s", skillName, time.Now().Format("20060102-150405")))
 			}
-			var childLogWriter *os.File
-			if debug {
-				childLogWriter = logFile
-			}
+
 			config := runner.Config{
+				RunID:          loggerRunID,
 				SkillName:      skillName,
 				SkillDir:       skillDir,
 				Prompt:         prompt,
@@ -106,13 +113,18 @@ Environment Variables:
 				WorkspacePath:  workspacePath,
 				BaseWorkspace:  baseWorkspace,
 				DataDir:        dataDir,
-				ChildLogWriter: childLogWriter,
+				ChildLogWriter: logFile,
 			}
 
 			slog.Info("using workspace", "path", workspacePath)
 
 			ctx := context.Background()
-			return runner.RunSkill(ctx, config)
+			err = runner.RunSkill(ctx, config)
+			if err != nil {
+				slog.Error("run failed", "error", err)
+				return err
+			}
+			return nil
 		},
 	}
 	rootCmd.Flags().StringVarP(&skillName, "skill", "s", "", "Name of the skill to run (required)")

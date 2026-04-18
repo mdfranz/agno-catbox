@@ -19,6 +19,7 @@ import (
 
 // Runner manages the execution of a skill in a sandbox
 type Runner struct {
+	RunID           string
 	SkillConfig     *skill.SkillConfig
 	WorkspacePath   string
 	BaseWorkspace   string
@@ -36,29 +37,32 @@ var errNamespaceBootstrap = errors.New("namespace sandbox bootstrap failed")
 // If namespaces are unavailable, it falls back to symlink-based PATH
 // restriction with process group controls.
 func (r *Runner) Run(ctx context.Context) error {
-	slog.Info("starting sandbox run", "skill", r.SkillConfig.Name, "workspace", r.WorkspacePath)
-	if NamespacesAvailable() {
-		slog.Info("sandbox mode: namespace isolation (user+mount+pid)")
-		if err := r.runWithNamespaces(ctx); err == nil {
-			slog.Info("sandbox run completed successfully")
-			return nil
-		} else if errors.Is(err, errNamespaceBootstrap) {
-			slog.Warn("namespace bootstrap failed, falling back to PATH restriction only", "error", err)
-			slog.Info("sandbox mode: fallback (PATH restriction only, host filesystem accessible)")
-			return r.runWithoutNamespaces(ctx)
-		} else {
-			return err
-		}
-	}
-	slog.Warn("namespace isolation unavailable, falling back to PATH restriction only")
-	slog.Info("sandbox mode: fallback (PATH restriction only, host filesystem accessible)")
-	err := r.runWithoutNamespaces(ctx)
-	if err == nil {
-		slog.Info("sandbox run completed successfully (fallback)")
-	}
-	return err
-}
+        start := time.Now()
+        slog.Info("starting sandbox run", "skill", r.SkillConfig.Name, "workspace", r.WorkspacePath)
 
+        var err error
+        if NamespacesAvailable() {
+                slog.Info("sandbox mode: namespace isolation (user+mount+pid)")
+                err = r.runWithNamespaces(ctx)
+                if err != nil && errors.Is(err, errNamespaceBootstrap) {
+                        slog.Warn("namespace bootstrap failed, falling back to PATH restriction only", "error", err)
+                        slog.Info("sandbox mode: fallback (PATH restriction only, host filesystem accessible)")
+                        err = r.runWithoutNamespaces(ctx)
+                }
+        } else {
+                slog.Warn("namespace isolation unavailable, falling back to PATH restriction only")
+                slog.Info("sandbox mode: fallback (PATH restriction only, host filesystem accessible)")
+                err = r.runWithoutNamespaces(ctx)
+        }
+
+        duration := time.Since(start)
+        if err == nil {
+                slog.Info("sandbox run completed successfully", "duration", duration.String())
+        } else {
+                slog.Error("sandbox run failed", "error", err, "duration", duration.String())
+        }
+        return err
+}
 // runWithNamespaces uses the re-exec pattern with CLONE_NEWUSER + CLONE_NEWNS + CLONE_NEWPID
 // to run the command inside a minimal rootfs with only allowed binaries visible.
 func (r *Runner) runWithNamespaces(ctx context.Context) error {
@@ -80,22 +84,22 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	slog.Info("preparing rootfs")
 	rootfs, err := PrepareRootFS(r.SkillConfig)
 	if err != nil {
-		return fmt.Errorf("failed to prepare rootfs: %w", err)
+	        return fmt.Errorf("failed to prepare rootfs: %w", err)
 	}
 	defer rootfs.Cleanup()
-	slog.Debug("rootfs prepared", "path", rootfs.Path)
+	slog.Info("rootfs prepared", "path", rootfs.Path)
 
 	// Copy runner.py into the rootfs so it's accessible after pivot_root
 	rootfsRunnerPy := filepath.Join(rootfs.Path, "runner.py")
 	if err := copyFile(runnerPyPath, rootfsRunnerPy); err != nil {
-		return fmt.Errorf("failed to copy runner.py to rootfs: %w", err)
+	        return fmt.Errorf("failed to copy runner.py to rootfs: %w", err)
 	}
 	slog.Debug("copied runner script to rootfs", "src", runnerPyPath, "dst", rootfsRunnerPy)
 
 	// Copy skill directory into rootfs
 	rootfsSkillDir := filepath.Join(rootfs.Path, ".skill")
 	if err := CopyDir(absSkillDir, rootfsSkillDir); err != nil {
-		return fmt.Errorf("failed to copy skill dir to rootfs: %w", err)
+	        return fmt.Errorf("failed to copy skill dir to rootfs: %w", err)
 	}
 	slog.Debug("copied skill directory to rootfs", "src", absSkillDir, "dst", rootfsSkillDir)
 
@@ -111,25 +115,25 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	venvPython := filepath.Join(venvPath, "bin", "python3")
 	hasVenv := false
 	if _, err := os.Stat(venvPython); err == nil {
-		hasVenv = true
-		pythonBin = "/.venv/bin/python3"
-		env.Values["VIRTUAL_ENV"] = "/.venv"
-		slog.Debug("using base workspace venv python", "path", venvPython)
+	        hasVenv = true
+	        pythonBin = "/.venv/bin/python3"
+	        env.Values["VIRTUAL_ENV"] = "/.venv"
+	        slog.Debug("using base workspace venv python", "path", venvPython)
 	}
 	envList := env.ToEnv()
 	slog.Debug("prepared environment for child", "count", len(envList))
 
 	childArgs := []string{
-		"/runner.py",
-		r.SkillConfig.Name,
-		r.Prompt,
-		"/.skill",
+	        "/runner.py",
+	        r.SkillConfig.Name,
+	        r.Prompt,
+	        "/.skill",
 	}
 	if r.Model != "" {
-		childArgs = append(childArgs, "--model", r.Model)
+	        childArgs = append(childArgs, "--model", r.Model)
 	}
 	if r.Debug {
-		childArgs = append(childArgs, "--debug")
+	        childArgs = append(childArgs, "--debug")
 	}
 	slog.Debug("prepared child arguments", "args", childArgs)
 
@@ -137,38 +141,39 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	mounts := BindMountList(rootfs.Path, r.WorkspacePath, r.SkillConfig)
 	slog.Debug("prepared mount list", "count", len(mounts))
 	if r.Debug {
-		for i, m := range mounts {
-			slog.Debug("mount entry", "i", i, "source", m.Source, "target", m.Target, "type", m.Flags.String())
-		}
+	        for i, m := range mounts {
+	                slog.Debug("mount entry", "i", i, "source", m.Source, "target", m.Target, "type", m.Flags.String())
+	        }
 	}
 
 	// Bind-mount the .venv if it exists
 	if hasVenv {
-		venvTarget := filepath.Join(rootfs.Path, ".venv")
-		if err := os.MkdirAll(venvTarget, 0755); err != nil {
-			return fmt.Errorf("failed to create .venv dir in rootfs: %w", err)
-		}
-		mounts = append(mounts, MountEntry{
-			Source: venvPath,
-			Target: venvTarget,
-			FSType: "",
-			Flags:  bindReadOnly,
-		})
+	        venvTarget := filepath.Join(rootfs.Path, ".venv")
+	        if err := os.MkdirAll(venvTarget, 0755); err != nil {
+	                return fmt.Errorf("failed to create .venv dir in rootfs: %w", err)
+	        }
+	        mounts = append(mounts, MountEntry{
+	                Source: venvPath,
+	                Target: venvTarget,
+	                FSType: "",
+	                Flags:  bindReadOnly,
+	        })
 	}
 
 	// Serialize the child config
 	childConfig := ChildConfig{
-		RootFSPath:    rootfs.Path,
-		WorkspacePath: r.WorkspacePath,
-		Command:       pythonBin,
-		Args:          childArgs,
-		Env:           envList,
-		Mounts:        mounts,
-		Debug:         r.Debug,
+	        RunID:         r.RunID,
+	        RootFSPath:    rootfs.Path,
+	        WorkspacePath: r.WorkspacePath,
+	        Command:       pythonBin,
+	        Args:          childArgs,
+	        Env:           envList,
+	        Mounts:        mounts,
+	        Debug:         r.Debug,
 	}
 	configJSON, err := json.Marshal(childConfig)
 	if err != nil {
-		return fmt.Errorf("failed to serialize child config: %w", err)
+	        return fmt.Errorf("failed to serialize child config: %w", err)
 	}
 
 	// Re-exec ourselves with the child config in an env var.
@@ -176,20 +181,20 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	// pivot_root, and exec the real command.
 	selfExe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to get self executable: %w", err)
+	        return fmt.Errorf("failed to get self executable: %w", err)
 	}
 
 	slog.Debug("os: Pipe")
 	readyR, readyW, err := os.Pipe()
 	if err != nil {
-		return fmt.Errorf("failed to create readiness pipe: %w", err)
+	        return fmt.Errorf("failed to create readiness pipe: %w", err)
 	}
 
 	cmd := exec.CommandContext(ctx, selfExe)
 	cmd.Env = append(
-		envList,
-		childEnvKey+"="+string(configJSON),
-		childReadyEnvKey+"=3",
+	        envList,
+	        childEnvKey+"="+string(configJSON),
+	        childReadyEnvKey+"=3",
 	)
 	cmd.ExtraFiles = []*os.File{readyW}
 	cmd.Stdout = os.Stdout
@@ -197,15 +202,15 @@ func (r *Runner) runWithNamespaces(ctx context.Context) error {
 	cmd.Dir = r.WorkspacePath
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid:   true,
-		Pdeathsig: syscall.SIGKILL,
+	        Setpgid:   true,
+	        Pdeathsig: syscall.SIGKILL,
 	}
 	if err := SetupNamespaces(cmd.SysProcAttr); err != nil {
-		readyW.Close()
-		return fmt.Errorf("%w: failed to setup namespaces: %w", errNamespaceBootstrap, err)
+	        readyW.Close()
+	        return fmt.Errorf("%w: failed to setup namespaces: %w", errNamespaceBootstrap, err)
 	}
 
-	slog.Info("starting namespaced child process", "exe", selfExe)
+	slog.Info("starting namespaced child process", "exe", selfExe, "python", pythonBin)
 	if err := cmd.Start(); err != nil {
 		readyW.Close()
 		return fmt.Errorf("%w: failed to start namespaced process: %w", errNamespaceBootstrap, err)
@@ -328,23 +333,24 @@ func (r *Runner) waitForCompletion(ctx context.Context, cmd *exec.Cmd) error {
 
 	select {
 	case err := <-doneChan:
-		if err != nil {
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
-				slog.Error("skill execution failed", "exit_code", exitErr.ExitCode())
-			} else if errors.Is(err, syscall.EINVAL) || strings.Contains(err.Error(), "invalid argument") {
-				// EINVAL (invalid argument) can occur on some Linux kernels when waiting for a process
-				// that was PID 1 in a namespace that has already been torn down.
-				// If we got here, it means the wait is over and the process likely finished successfully.
-				slog.Warn("cmd.Wait() returned EINVAL/invalid argument; assuming process finished", "pid", cmd.Process.Pid, "error", err)
-				return nil
-			} else {
-				slog.Error("skill execution failed", "error", err)
-			}
-			return fmt.Errorf("skill execution failed: %w", err)
-		}
-		slog.Info("skill execution successful")
-		return nil
+	        if err != nil {
+	                var exitErr *exec.ExitError
+	                if errors.As(err, &exitErr) {
+	                        slog.Error("skill execution failed", "exit_code", exitErr.ExitCode())
+	                        return fmt.Errorf("skill execution failed with exit code %d", exitErr.ExitCode())
+	                } else if errors.Is(err, syscall.EINVAL) || strings.Contains(err.Error(), "invalid argument") {
+	                        // EINVAL (invalid argument) can occur on some Linux kernels when waiting for a process
+	                        // that was PID 1 in a namespace that has already been torn down.
+	                        // If we got here, it means the wait is over and the process likely finished successfully.
+	                        slog.Warn("cmd.Wait() returned EINVAL/invalid argument; assuming process finished", "pid", cmd.Process.Pid, "error", err)
+	                        return nil
+	                } else {
+	                        slog.Error("skill execution failed", "error", err)
+	                        return fmt.Errorf("skill execution failed: %w", err)
+	                }
+	        }
+	        slog.Info("skill execution successful", "pid", cmd.Process.Pid)
+	        return nil
 	case <-time.After(r.SkillConfig.ParsedTimeout):
 		slog.Error("skill execution timed out", "timeout", r.SkillConfig.ParsedTimeout)
 		killProcessGroup(cmd.Process.Pid)
@@ -441,13 +447,60 @@ func killProcessGroup(pid int) {
 }
 
 // childStderr returns the writer to use for the child process's stderr.
-// When a ChildLogWriter is set, stderr is tee'd to both the terminal and the log.
+// When a ChildLogWriter is set, stderr is always written to it.
+// We only tee to the terminal if the output does NOT look like a structured JSON log,
+// to avoid cluttering the terminal with sandbox internal logs.
 func (r *Runner) childStderr() io.Writer {
-	if r.ChildLogWriter != nil {
-		return io.MultiWriter(os.Stderr, r.ChildLogWriter)
+	if r.ChildLogWriter == nil {
+		return os.Stderr
 	}
-	return os.Stderr
+
+	return &filteredTeeWriter{
+		terminal: os.Stderr,
+		logFile:  r.ChildLogWriter,
+	}
 }
+
+type filteredTeeWriter struct {
+	terminal io.Writer
+	logFile  io.Writer
+	buf      []byte
+}
+
+func (w *filteredTeeWriter) Write(p []byte) (n int, err error) {
+	// Always write everything to the log file
+	if _, err := w.logFile.Write(p); err != nil {
+		return 0, err
+	}
+
+	// For the terminal, we want to filter out lines that look like structured JSON logs
+	// (which start with '{"time":' or simply '{' in our case).
+	// This is a simple heuristic: if a chunk starts with '{', we don't write it to terminal.
+	// We handle the buffer to check for the start of lines.
+
+	w.buf = append(w.buf, p...)
+
+	start := 0
+	for i := 0; i < len(w.buf); i++ {
+		if w.buf[i] == '\n' || i == len(w.buf)-1 {
+			line := w.buf[start : i+1]
+			trimmed := strings.TrimSpace(string(line))
+			if !strings.HasPrefix(trimmed, "{") {
+				_, _ = w.terminal.Write(line)
+			}
+			start = i + 1
+		}
+	}
+
+	if start < len(w.buf) {
+		w.buf = w.buf[start:]
+	} else {
+		w.buf = nil
+	}
+
+	return len(p), nil
+}
+
 
 // copyFile copies a single file.
 func copyFile(src, dst string) error {

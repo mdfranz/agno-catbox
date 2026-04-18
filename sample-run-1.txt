@@ -1,0 +1,13 @@
+INFO Reading files in : /workspace                                              
+WARNING  PythonTools can run arbitrary code, please provide human supervision.  
+INFO Saved: /workspace/count_events.py                                          
+INFO Running /workspace/count_events.py                                         
+   1652 flow
+    412 dns
+    196 alert
+    116 tls
+     64 stats
+      2 http
+INFO Running shell command: ['python', 'count_events.py']                       
+WARNING  Failed to run shell command: [Errno 2] No such file or directory:      
+         'python'                                                               
