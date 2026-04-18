@@ -2,6 +2,7 @@
 import sys
 import os
 import io
+import logging
 
 import yaml
 from pathlib import Path
@@ -51,6 +52,16 @@ def main():
     log_file = open("runner.log", "a")
     sys.stdout = TeeWriter(sys.stdout, log_file)
     sys.stderr = TeeWriter(sys.stderr, log_file)
+
+    # Configure Python logging to capture all library logs
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler("runner.log", mode="a"),
+            logging.StreamHandler(sys.stderr),
+        ]
+    )
 
     try:
         if len(sys.argv) < 4:
