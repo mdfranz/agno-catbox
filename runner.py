@@ -54,11 +54,11 @@ def main():
     sys.stderr = TeeWriter(sys.stderr, log_file)
 
     # Configure Python logging to capture all library logs
+    # Write to stderr, which is already being tee'd to runner.log via TeeWriter
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("runner.log", mode="a"),
             logging.StreamHandler(sys.stderr),
         ]
     )
