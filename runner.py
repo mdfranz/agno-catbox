@@ -8,6 +8,7 @@ import yaml
 from pathlib import Path
 from agno.agent import Agent
 from agno.models.google import Gemini
+from agno.models.openai import OpenAIChat
 from agno.tools.shell import ShellTools
 from agno.tools.python import PythonTools
 
@@ -94,9 +95,15 @@ def main():
         # Use instructions from SKILL.md if available
         instructions = config.get("instructions_md", config.get("description", "You are a security analyst."))
 
+        # Initialize the model based on model_id
+        if model_id.startswith("gpt-") or model_id.startswith("o1") or model_id.startswith("o3"):
+            model = OpenAIChat(id=model_id)
+        else:
+            model = Gemini(id=model_id, thinking_budget=16000, include_thoughts=True)
+
         # Initialize the Agno Agent
         agent = Agent(
-            model=Gemini(id=model_id, thinking_budget=16000, include_thoughts=True),
+            model=model,
             instructions=[instructions],
             tools=[
                 PythonTools(base_dir=Path.cwd()),
@@ -158,7 +165,7 @@ def main():
         except Exception as e:
             print(f"Error executing agent: {e}", file=sys.stderr)
             if "API_KEY" in str(e).upper():
-                print("\nNote: This runner requires a valid GOOGLE_API_KEY or ANTHROPIC_API_KEY.", file=sys.stderr)
+                print("\nNote: This runner requires a valid GOOGLE_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY.", file=sys.stderr)
                 print("The sandbox filters environment variables for security.", file=sys.stderr)
             sys.exit(1)
     finally:
