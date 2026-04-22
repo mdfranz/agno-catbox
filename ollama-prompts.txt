@@ -1,0 +1,5 @@
+Count the different types of events in eve.json and provide a summary of the counts exactly as found by your tool.
+Identify the top 5 source IP addresses and the number of events for each.
+Check for any suspicious DNS queries or unusual TLS SNI values in the logs.
+Find all systems running Windows
+Identify any IOT devices on this network
