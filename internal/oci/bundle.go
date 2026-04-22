@@ -19,23 +19,37 @@ type Bundle struct {
 	Retain     bool
 }
 
-// NewBundle creates an empty bundle directory.
-// retain=true suppresses cleanup on Close (useful for --debug).
-func NewBundle(parent string, retain bool) (*Bundle, error) {
+// NewBundle creates or reuses a bundle directory.
+// If name is provided, the directory is fixed; otherwise MkdirTemp is used.
+// retain=true suppresses cleanup on Close (useful for --debug or reuse).
+func NewBundle(parent, name string, retain bool) (*Bundle, error) {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create bundle parent %s: %w", parent, err)
 	}
-	dir, err := os.MkdirTemp(parent, "bundle-*")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bundle dir: %w", err)
+
+	var dir string
+	if name != "" {
+		dir = filepath.Join(parent, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create bundle dir: %w", err)
+		}
+	} else {
+		var err error
+		dir, err = os.MkdirTemp(parent, "bundle-*")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create bundle dir: %w", err)
+		}
 	}
+
 	rootfs := filepath.Join(dir, "rootfs")
 	if err := os.MkdirAll(rootfs, 0o755); err != nil {
-		os.RemoveAll(dir)
+		if name == "" {
+			os.RemoveAll(dir)
+		}
 		return nil, fmt.Errorf("failed to create rootfs dir: %w", err)
 	}
-	slog.Debug("oci: bundle created", "dir", dir)
-	return &Bundle{Dir: dir, RootFSPath: rootfs, Retain: retain}, nil
+	slog.Debug("oci: bundle initialized", "dir", dir, "fixed", name != "")
+	return &Bundle{Dir: dir, RootFSPath: rootfs, Retain: retain || name != ""}, nil
 }
 
 // ConfigPath returns the absolute path to config.json within the bundle.

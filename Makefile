@@ -16,7 +16,7 @@ IMAGE_TAG=skill-runner-image
 
 .PHONY: all build build-oci build-all test clean lint run help image image-clean
 
-all: build
+all: build build-oci
 
 ## build: Build the namespace-sandbox binary (skill-runner)
 build:

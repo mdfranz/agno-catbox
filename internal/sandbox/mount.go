@@ -23,9 +23,14 @@ func SetupEnvironment() Environment {
 			"GOOGLE_API_KEY",
 			"ANTHROPIC_API_KEY",
 			"OPENAI_API_KEY",
+			"OPENAI_REASONING_EFFORT",
+			"OPENAI_MAX_COMPLETION_TOKENS",
+			"OPENAI_TEMPERATURE",
 			"GEMINI_API_KEY",
+			"AGENT_REASONING",
 			"OLLAMA_HOST",
-			"PATH",		},
+			"PATH",
+		},
 		Values: make(map[string]string),
 	}
 

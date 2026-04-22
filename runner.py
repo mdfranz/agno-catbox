@@ -100,7 +100,17 @@ def main():
         # Initialize the model based on model_id
         if model_id.startswith("gpt-") or model_id.startswith("o1") or model_id.startswith("o3"):
             from agno.models.openai import OpenAIChat
-            model = OpenAIChat(id=model_id)
+            
+            # OpenAI-specific parameters from environment variables
+            openai_params = {}
+            if os.getenv("OPENAI_REASONING_EFFORT"):
+                openai_params["reasoning_effort"] = os.getenv("OPENAI_REASONING_EFFORT")
+            if os.getenv("OPENAI_MAX_COMPLETION_TOKENS"):
+                openai_params["max_completion_tokens"] = int(os.getenv("OPENAI_MAX_COMPLETION_TOKENS"))
+            if os.getenv("OPENAI_TEMPERATURE"):
+                openai_params["temperature"] = float(os.getenv("OPENAI_TEMPERATURE"))
+                
+            model = OpenAIChat(id=model_id, **openai_params)
         elif model_id.startswith("claude-"):
             from agno.models.anthropic import Claude
             model = Claude(id=model_id)
@@ -111,6 +121,11 @@ def main():
             from agno.models.google import Gemini
             model = Gemini(id=model_id, thinking_budget=16000, include_thoughts=True)
 
+        # Agent reasoning logic: Default to True (except Ollama), but allow env override
+        agent_reasoning = False if model_id.startswith("ollama/") else True
+        if os.getenv("AGENT_REASONING") is not None:
+            agent_reasoning = os.getenv("AGENT_REASONING").lower() in ("1", "true", "yes")
+
         # Initialize the Agno Agent
         agent = Agent(
             model=model,
@@ -120,7 +135,7 @@ def main():
                 ShellTools(base_dir=Path.cwd())
             ],
             markdown=True,
-            reasoning=False if model_id.startswith("ollama/") else True,
+            reasoning=agent_reasoning,
         )
 
         # Run the agent

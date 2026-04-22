@@ -12,6 +12,10 @@ func TestSetupEnvironment_FiltersVars(t *testing.T) {
 	// Set some vars that should pass through
 	os.Setenv("GOOGLE_API_KEY", "test-google-key")
 	os.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	os.Setenv("OPENAI_REASONING_EFFORT", "high")
+	os.Setenv("OPENAI_MAX_COMPLETION_TOKENS", "8000")
+	os.Setenv("OPENAI_TEMPERATURE", "0.7")
+	os.Setenv("AGENT_REASONING", "false")
 	// Set some vars that should NOT pass through
 	os.Setenv("HOME", "/home/testuser")
 	os.Setenv("SECRET_TOKEN", "should-not-appear")
@@ -19,6 +23,10 @@ func TestSetupEnvironment_FiltersVars(t *testing.T) {
 	defer func() {
 		os.Unsetenv("GOOGLE_API_KEY")
 		os.Unsetenv("ANTHROPIC_API_KEY")
+		os.Unsetenv("OPENAI_REASONING_EFFORT")
+		os.Unsetenv("OPENAI_MAX_COMPLETION_TOKENS")
+		os.Unsetenv("OPENAI_TEMPERATURE")
+		os.Unsetenv("AGENT_REASONING")
 		os.Unsetenv("SECRET_TOKEN")
 	}()
 
@@ -30,6 +38,18 @@ func TestSetupEnvironment_FiltersVars(t *testing.T) {
 	if env.Values["ANTHROPIC_API_KEY"] != "test-anthropic-key" {
 		t.Errorf("expected ANTHROPIC_API_KEY=test-anthropic-key, got %q", env.Values["ANTHROPIC_API_KEY"])
 	}
+	if env.Values["OPENAI_REASONING_EFFORT"] != "high" {
+		t.Errorf("expected OPENAI_REASONING_EFFORT=high, got %q", env.Values["OPENAI_REASONING_EFFORT"])
+	}
+	if env.Values["OPENAI_MAX_COMPLETION_TOKENS"] != "8000" {
+		t.Errorf("expected OPENAI_MAX_COMPLETION_TOKENS=8000, got %q", env.Values["OPENAI_MAX_COMPLETION_TOKENS"])
+	}
+	if env.Values["OPENAI_TEMPERATURE"] != "0.7" {
+		t.Errorf("expected OPENAI_TEMPERATURE=0.7, got %q", env.Values["OPENAI_TEMPERATURE"])
+	}
+	if env.Values["AGENT_REASONING"] != "false" {
+		t.Errorf("expected AGENT_REASONING=false, got %q", env.Values["AGENT_REASONING"])
+	}
 	if _, ok := env.Values["HOME"]; ok {
 		t.Error("HOME should not be in filtered environment")
 	}
@@ -40,23 +60,32 @@ func TestSetupEnvironment_FiltersVars(t *testing.T) {
 
 func TestSetupEnvironment_ToEnv(t *testing.T) {
 	os.Setenv("GOOGLE_API_KEY", "key123")
+	os.Setenv("OPENAI_REASONING_EFFORT", "medium")
 	defer os.Unsetenv("GOOGLE_API_KEY")
+	defer os.Unsetenv("OPENAI_REASONING_EFFORT")
 
 	env := SetupEnvironment()
 	envList := env.ToEnv()
 
-	found := false
+	foundGoogle := false
+	foundOpenAIReasoning := false
 	for _, e := range envList {
 		if e == "GOOGLE_API_KEY=key123" {
-			found = true
+			foundGoogle = true
+		}
+		if e == "OPENAI_REASONING_EFFORT=medium" {
+			foundOpenAIReasoning = true
 		}
 		// Should never contain HOME, USER, etc.
 		if len(e) > 5 && e[:5] == "HOME=" {
 			t.Error("HOME should not appear in env list")
 		}
 	}
-	if !found {
+	if !foundGoogle {
 		t.Error("GOOGLE_API_KEY=key123 not found in env list")
+	}
+	if !foundOpenAIReasoning {
+		t.Error("OPENAI_REASONING_EFFORT=medium not found in env list")
 	}
 }
 

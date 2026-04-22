@@ -64,14 +64,20 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	bundleParent := filepath.Join(absWorkspace, ".bundle")
-	bundle, err := NewBundle(bundleParent, cfg.Debug)
+	// Use cfg.RunID as the bundle name to allow reuse if RunID is fixed.
+	bundle, err := NewBundle(bundleParent, cfg.RunID, cfg.Debug)
 	if err != nil {
 		return err
 	}
 	defer bundle.Close()
 
-	if err := UnpackRootFS(cfg.ImageDir, bundle.RootFSPath); err != nil {
-		return fmt.Errorf("unpack rootfs: %w", err)
+	// Only unpack if rootfs looks empty to allow reuse
+	if _, err := os.Stat(filepath.Join(bundle.RootFSPath, "bin")); os.IsNotExist(err) {
+		if err := UnpackRootFS(cfg.ImageDir, bundle.RootFSPath); err != nil {
+			return fmt.Errorf("unpack rootfs: %w", err)
+		}
+	} else {
+		slog.Info("oci: reusing existing rootfs", "path", bundle.RootFSPath)
 	}
 
 	args := []string{"python3", "/runner.py", cfg.SkillConfig.Name, cfg.Prompt, "/.skill"}

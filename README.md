@@ -1,178 +1,236 @@
 # Agno Skill Runner
 
-A Go-based tool that runs [Agno](https://docs.agno.com) AI agent skills in a sandboxed Linux environment. **Two implementations ship side-by-side** for A/B comparison:
+Agno Skill Runner is a Linux-first tool for running Agno skills with lightweight isolation. The repository currently ships **two execution paths** that share the same skill format, Python runner, and CLI shape:
 
-- **`skill-runner`** — hand-rolled user+mount+PID namespace sandbox with pivot_root and a symlinked command directory (the original).
-- **`skill-runner-oci`** — daemonless OCI container. Uses a locally-built OCI image (via `buildah`) and an external OCI runtime (`crun` preferred, `runc` fallback). **No Docker or Podman daemon.**
+- `skill-runner`: namespace-based sandboxing with a copied `runner.py` and a minimal rootfs assembled on the host.
+- `skill-runner-oci`: daemonless OCI execution using a locally built image plus `crun` or `runc`.
 
-Both binaries share the same `skills/`, `runner.py`, skill loader, and CLI flag surface. Run the same prompt through both and compare `runs/`.
+This project is best treated as an **execution guardrail for trusted workflows**, not a hardened container boundary. It helps reduce accidental exposure of host credentials and filesystem state, but it does not claim strong containment against adversarial code or prompts.
+
+## Current capabilities
+
+- Skill loading from `./skills/<name>` or a direct skill directory path
+- Per-run workspaces under a base workspace directory
+- Optional data staging via `--data`
+- Model selection for Gemini, OpenAI, Anthropic, and Ollama IDs
+- Per-skill timeout and memory settings from `skill.yaml`
+- Shared Python agent runner in [`runner.py`](/home/mfranz/github/agno-catbox/runner.py)
 
 ## Prerequisites
 
-- Linux (kernel 4.18+ with unprivileged user namespaces enabled)
-- Go 1.21+ (to build)
-- Python 3 and [uv](https://github.com/astral-sh/uv) (for workspace setup of the namespace binary)
-- For `skill-runner-oci` only: `buildah` at build time, `crun` (or `runc`) at runtime
-- API keys for the model you want to use
+### Common
+
+- Linux
+- Go 1.21+
+- One provider credential, depending on the model you plan to use:
+  - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+  - `OPENAI_API_KEY`
+  - `ANTHROPIC_API_KEY`
+  - `OLLAMA_HOST` for Ollama
+
+### Namespace runner
+
+- Unprivileged user namespaces enabled if you want namespace isolation
+- Python 3
+- `uv` for preparing the workspace venv used by `runner.py`
+
+### OCI runner
+
+- `buildah` to build the OCI image
+- `crun` preferred, or `runc`
 
 ## Build
 
 ```bash
-make build        # skill-runner (namespace)
-make build-oci    # skill-runner-oci (OCI runtime)
-make build-all    # both
-make image        # OCI runtime image → ./image/ (OCI layout)
+make build        # skill-runner
+make build-oci    # skill-runner-oci
+make build-all    # both binaries
+make image        # build ./image OCI layout for skill-runner-oci
 ```
 
-At runtime, the namespace binary resolves `runner.py` in this order:
+The namespace binary resolves `runner.py` in this order:
 
-1. `-runner /path/to/runner.py`
+1. `--runner /path/to/runner.py`
 2. `SKILL_RUNNER_PY=/path/to/runner.py`
 3. `runner.py` next to the `skill-runner` binary
 
-The OCI binary bakes `runner.py` into the image; no host lookup happens.
+The OCI binary does not resolve a host-side runner script. It always uses the `runner.py` baked into the OCI image.
 
-## OCI binary quick start
+## Quick start
 
-```bash
-make image                        # builds ./image/ OCI layout via buildah
-./skill-runner-oci doctor         # sanity-check runtime, image, user-ns
-./skill-runner-oci \
-  -s suricata-analyst \
-  -p "Analyze eve.json" \
-  -w ./runs
-```
-
-Subcommands:
-- `skill-runner-oci image build` — build the image via buildah (alternative to `make image`)
-- `skill-runner-oci image path`  — print the resolved image layout dir
-- `skill-runner-oci doctor`      — check `crun`/`runc`, image, user-ns, cgroup v2
-
-### How the OCI path differs
-
-| Concern | `skill-runner` | `skill-runner-oci` |
-|---|---|---|
-| Rootfs | symlinks + bind of host `/usr` | OCI image layers (no host binaries) |
-| `allowed_commands` | symlinked into `/bin` (leaky via `/usr/bin/...`) | image contents; enforced |
-| Timeout / memory / cpu | hand-rolled cgroup v2 writes | runtime-spec `linux.resources` |
-| `/.skill` | copied into rootfs | ro bind mount |
-| Network | host | host (toggle with `--network-isolated`) |
-| External deps | none | `crun`/`runc` + `buildah` |
-| Static binary | yes | no (shells out to runtime) |
-
-## Setup
-
-1. **Export your API key:**
-
-   ```bash
-   export GEMINI_API_KEY="your-key-here"
-   ```
-
-2. **Prepare the workspace:**
-
-   ```bash
-   ./prep.sh
-   ```
-   This script creates a `./runs` directory and sets up a Python virtual environment with all necessary dependencies (Agno, Polars, orjson, etc.).
-
-3. **Add your data:**
-
-   ```bash
-   cp /path/to/eve.json ./runs/
-   ```
-
-## Usage
+### Namespace runner
 
 ```bash
-./skill-runner -skill <name> -prompt "<task>" [options]
-```
+export GEMINI_API_KEY="your-key"
+make build
+./prep.sh
 
-**Options:**
-- `-skill`: Skill name or path (e.g., `suricata-analyst`)
-- `-prompt`: Task for the agent (e.g., "Find top 10 DNS queries")
-- `-workspace`: Workspace directory (default: `.`)
-- `-model`: Model ID (default: `gemini-2.0-flash`)
-- `-debug`: Enable debug logging
-
-### Example: Suricata Threat Hunting
-
-The following example uses the built-in `suricata-analyst` skill to investigate network logs:
-
-```bash
 ./skill-runner \
-  -skill suricata-analyst \
-  -prompt "Analyze eve.json for suspicious mDNS traffic and rare SNIs" \
-  -workspace ./runs
+  --skill suricata-analyst \
+  --prompt "Analyze eve.json for suspicious DNS and TLS traffic" \
+  --workspace ./runs \
+  --data ./data
 ```
 
-**What the agent does:**
-1. **Discovers Schema**: Samples `eve.json` using `orjson` to understand the event structures.
-2. **Optimizes Data**: Converts filtered JSON events to Parquet (e.g., `mdns.parquet`) for high-performance analysis with Polars.
-3. **Executes Analysis**: Generates and runs Python scripts (e.g., `analyze_mdns.py`) to aggregate and pivot data.
-4. **Reports Findings**: Identifies anomalies such as unauthorized mDNS queries or suspicious external TLS connections.
+`./prep.sh` creates `./runs/.venv` and installs the Python packages expected by [`runner.py`](/home/mfranz/github/agno-catbox/runner.py). The namespace runner will use that base-workspace virtualenv automatically when it exists.
 
-The generated analysis scripts and Parquet files are retained in the workspace for further inspection.
+### OCI runner
 
+```bash
+export GEMINI_API_KEY="your-key"
+make build-oci
+make image
 
-## Security Model
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md) for the full architecture and design details. The short version: this tool prevents the agent from accidentally reading host credentials; it does **not** provide strong containment.
-
-**What namespace isolation actually gives you:**
-- Host home directories, SSH keys, and `/etc/` are not visible after `pivot_root`
-- Environment is filtered to API keys only — `HOME`, `USER`, `SSH_AUTH_SOCK`, etc. are stripped
-- PID namespace — agent only sees its own processes
-
-**What it does not prevent:**
-- **Network**: No network namespace. The agent has full outbound access.
-- **Binary access**: The full host `/usr` tree is bind-mounted read-only. Any binary in `/usr/bin` is reachable by absolute path regardless of `allowed_commands`.
-- **`allowed_commands` enforcement**: This list controls symlinks in `/bin` but does not block access to the same binaries via `/usr/bin/...`. Treat it as documentation, not a security boundary.
-- **Resource limits**: cgroups v2 limits require a writable `/sys/fs/cgroup`. This silently fails on many systems (containers, some VMs). The skill timeout is the only guaranteed bound.
-
-**Fallback mode** (when namespaces are unavailable or bootstrap fails):
-- PATH is restricted to allowed commands only
-- The agent can still access the full host filesystem via absolute paths
-- Environment is still filtered to API keys
-
-## Project Structure
-
+./skill-runner-oci doctor
+./skill-runner-oci \
+  --skill suricata-analyst \
+  --prompt "Analyze eve.json for suspicious DNS and TLS traffic" \
+  --workspace ./runs \
+  --data ./data
 ```
+
+Use `--network-isolated` to add a dedicated network namespace for the OCI path when you want outbound network disabled.
+
+## CLI notes
+
+Both binaries expose the same core flags:
+
+- `--skill`, `-s`: skill name or direct path
+- `--prompt`, `-p`: task for the agent
+- `--model`, `-m`: model ID, default `gemini-3.1-flash-lite-preview`
+- `--workspace`, `-w`: base workspace directory
+- `--data`, `-d`: directory copied into the run workspace before execution
+- `--run-name`: fixed workspace name for reruns or comparison runs
+- `--debug`: verbose logging
+
+OCI-only flags:
+
+- `--oci-image-dir`: override the OCI image layout location
+- `--runtime`: force `crun` or `runc`
+- `--network-isolated`: create a network namespace instead of using host networking
+
+## Workspace and logs
+
+Each run creates or reuses a subdirectory under the base workspace:
+
+- Namespace runner default: `run-<skill>-<timestamp>`
+- OCI runner default: `run-oci-<skill>-<timestamp>`
+- With `--run-name`, both runners reuse `<workspace>/<run-name>`
+
+The runners create these subdirectories in each run workspace:
+
+- `data/`
+- `code/`
+- `skills/`
+- `output/`
+
+Logging currently lands in two places:
+
+- Base workspace:
+  - [`skill-runner.log`](/home/mfranz/github/agno-catbox/skill-runner.log) for the namespace path
+  - [`skill-runner-oci.log`](/home/mfranz/github/agno-catbox/skill-runner-oci.log) for the OCI path
+- Run workspace:
+  - `runner.log` from the Python layer
+
+In OCI mode, the reusable runtime bundle lives under `<run-workspace>/.bundle/`.
+
+## Skill format
+
+Minimal `skill.yaml`:
+
+```yaml
+name: suricata-analyst
+description: Analyze Suricata EVE JSON logs
+allowed_commands:
+  - python3
+  - uv
+  - jq
+  - grep
+  - cat
+max_memory: 1G
+timeout: 300s
+```
+
+Optional `SKILL.md` content is loaded and passed to the Agno agent as the main instruction block.
+
+`allowed_commands` currently matters only for the namespace-based runner. The OCI path does not yet apply command whitelisting from `skill.yaml`.
+
+## Model support
+
+[`runner.py`](/home/mfranz/github/agno-catbox/runner.py) chooses the model backend from the model ID prefix:
+
+- `gpt-*`, `o1*`, `o3*` -> OpenAI
+- `claude-*` -> Anthropic
+- `ollama/*` -> Ollama
+- anything else -> Gemini
+
+Current environment pass-through is intentionally narrow. The sandbox forwards only:
+
+- `GOOGLE_API_KEY`
+- `GEMINI_API_KEY`
+- `OPENAI_API_KEY`
+- `OPENAI_REASONING_EFFORT`
+- `OPENAI_MAX_COMPLETION_TOKENS`
+- `OPENAI_TEMPERATURE`
+- `ANTHROPIC_API_KEY`
+- `AGENT_REASONING`
+- `OLLAMA_HOST`
+- `PATH`
+
+## Security boundaries
+
+### Namespace runner
+
+What it does:
+
+- Filters the environment before launching the agent
+- Attempts user, mount, and PID namespace isolation
+- Copies the skill into the sandbox rootfs
+- Uses per-skill timeout and best-effort cgroup limits
+- Restricts `PATH` to symlinked allowed commands in fallback mode
+
+What it does not do:
+
+- It does not block outbound network access
+- It does not provide strong command whitelisting because host `/usr` is still exposed in namespace mode
+- It does not guarantee cgroup enforcement on every host
+- It falls back to PATH-only restriction if namespace setup is unavailable
+
+### OCI runner
+
+What it does:
+
+- Runs inside a locally built OCI rootfs
+- Binds the run workspace at `/workspace`
+- Binds the skill read-only at `/.skill`
+- Can optionally isolate networking with `--network-isolated`
+
+What it does not do:
+
+- It does not currently enforce `allowed_commands`
+- It is not a hardened container profile
+- It still depends on the local OCI runtime and host kernel behavior
+
+## Project layout
+
+```text
 cmd/
-  skill-runner/main.go            Namespace-sandbox CLI (re-exec child pattern)
-  skill-runner-oci/main.go        OCI-runtime CLI + image/doctor subcommands
+  skill-runner/        namespace-runner CLI
+  skill-runner-oci/    OCI-runner CLI
 internal/
-  runner/exec.go                  Orchestrator for the namespace path
-  ocirunner/exec.go               Orchestrator for the OCI path
-  sandbox/                        Hand-rolled namespace sandbox
-    sandbox.go                      Main runner (namespace + fallback paths)
-    namespace.go                    User/mount/PID namespace setup
-    rootfs.go                       Minimal rootfs preparation
-    child.go                        Re-exec child: mount setup + pivot_root
-    mount.go                        Environment filtering, symlink PATH
-    cgroup.go                       cgroups v2 resource limits
-  oci/                            Daemonless OCI runtime
-    image.go                        Image-layout discovery/validation
-    bundle.go                       Per-run bundle dir
-    rootfs.go                       OCI layer → rootfs extraction (pure Go)
-    spec.go                         runtime-spec config.json builder
-    runtime.go                      crun/runc exec wrapper
-    runner.go                       Top-level Run()
-  skill/
-    types.go                        SkillConfig struct
-    loader.go                       YAML config loading
-runner.py                         Python/Agno agent orchestrator (baked into OCI image)
-Containerfile                     OCI image definition
-requirements.txt                  Pinned Python deps baked into the image
-skills/                           Skill definitions
+  runner/              namespace orchestration
+  ocirunner/           OCI orchestration
+  sandbox/             namespace sandbox implementation
+  oci/                 OCI image, bundle, spec, and runtime helpers
+  skill/               skill config loading
+runner.py              shared Python/Agno runner
+skills/                bundled skills
+Containerfile          OCI image definition
+requirements.txt       Python deps baked into the OCI image
 ```
 
-# Usage
+## Helper scripts
 
-```
- ./skill-runner -m gemini-3.1-pro-preview  -w ./runs -s suricata-analyst -p "Find interesting hosts based on TLS traffic" -d data --debug
-```
+The repo includes provider-specific wrapper scripts such as [`openai_test.sh`](/home/mfranz/github/agno-catbox/openai_test.sh), [`gemini_test.sh`](/home/mfranz/github/agno-catbox/gemini_test.sh), [`ollama_test.sh`](/home/mfranz/github/agno-catbox/ollama_test.sh), and [`run_test_suite.sh`](/home/mfranz/github/agno-catbox/run_test_suite.sh) for repeated prompt comparisons.
 
-
-## License
-
-See repository root.
+These scripts are useful for local benchmarking, but note that some environment-based model tuning shown in the wrappers is not currently passed through the sandbox.

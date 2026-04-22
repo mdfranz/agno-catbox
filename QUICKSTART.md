@@ -1,132 +1,143 @@
-# Quick Start Guide
+# Quick Start
+
+This guide covers the current repository workflow for both shipped runners:
+
+- `skill-runner`: namespace-based execution
+- `skill-runner-oci`: OCI-based execution
 
 ## 1. Build
 
 ```bash
-go build -o skill-runner ./cmd/skill-runner
+make build-all
 ```
 
-## 2. Prerequisites
-
-- Linux with unprivileged user namespaces (check: `cat /proc/sys/kernel/unprivileged_userns_clone` should be `1`)
-- Python 3 installed on the host
-- An API key:
-  ```bash
-  export GEMINI_API_KEY="your-key-here"
-  ```
-
-## 3. Prepare a workspace
-
-The workspace is where the agent operates. It needs Python dependencies installed. Choose one approach:
-
-**Option A: Persistent venv (recommended)**
-```bash
-mkdir -p ~/my-analysis
-cd ~/my-analysis
-cp /path/to/your/data.json .
-
-# Create Python environment with Agno dependencies
-uv venv
-uv pip install agno pyyaml google-genai google-generativeai polars orjson
-source .venv/bin/activate
-```
-
-**Option B: uv run (temporary venv per execution)**
-```bash
-mkdir -p ~/my-analysis
-cd ~/my-analysis
-cp /path/to/your/data.json .
-# Dependencies will be installed via uv run in step 5
-```
-
-## 4. Create a skill
+If you only need one binary:
 
 ```bash
-mkdir -p skills/my-analyst
+make build
+make build-oci
 ```
 
-Create `skills/my-analyst/skill.yaml`:
+## 2. Set credentials
 
-```yaml
-name: my-analyst
-description: Analyzes security events
-allowed_commands:
-  - python3
-  - uv
-  - jq
-  - grep
-  - cat
-  - head
-  - tail
-  - wc
-max_memory: 1G
-timeout: 300s
-```
+Export the credential that matches your model family:
 
-Optionally add a `skills/my-analyst/SKILL.md` with detailed instructions for the agent.
-
-## 5. Run
-
-**If you used Option A (persistent venv)**:
 ```bash
-source ~/my-analysis/.venv/bin/activate
+export GEMINI_API_KEY="your-key"
+# or export GOOGLE_API_KEY="your-key"
+# or export OPENAI_API_KEY="your-key"
+# or export ANTHROPIC_API_KEY="your-key"
+```
+
+For Ollama:
+
+```bash
+export OLLAMA_HOST="http://localhost:11434"
+```
+
+## 3. Prepare input data
+
+Place your analysis inputs in a directory you can pass with `--data`. The runner copies that directory into the run workspace before execution.
+
+Example:
+
+```bash
+mkdir -p ./data
+cp /path/to/eve.json ./data/
+```
+
+## 4. Namespace runner setup
+
+The namespace path expects a Python environment in the **base workspace**. The repository helper script prepares that for `./runs`.
+
+```bash
+./prep.sh
+```
+
+That creates:
+
+- `./runs/.venv`
+- Python dependencies required by [`runner.py`](/home/mfranz/github/agno-catbox/runner.py)
+
+Run the bundled skill:
+
+```bash
 ./skill-runner \
-  -skill my-analyst \
-  -prompt "Analyze the data.json file" \
-  -runner ./runner.py \
-  -workspace ~/my-analysis
+  --skill suricata-analyst \
+  --prompt "Analyze eve.json for suspicious DNS and TLS traffic" \
+  --workspace ./runs \
+  --data ./data
 ```
 
-**If you used Option B (uv run)**:
-```bash
-cd ~/my-analysis
-uv run -p agno,pyyaml,google-genai,google-generativeai,polars,orjson \
-  /path/to/skill-runner \
-  -skill my-analyst \
-  -prompt "Analyze the data.json file" \
-  -runner /path/to/runner.py \
-  -workspace .
-```
+Useful notes:
 
-If you install the binary elsewhere, keep passing `-runner /path/to/runner.py` or set `SKILL_RUNNER_PY`.
+- Default model: `gemini-3.1-flash-lite-preview`
+- Skill discovery checks `./skills/<name>` first, then a direct path
+- `runner.py` resolves from `--runner`, then `SKILL_RUNNER_PY`, then next to the binary
 
-## 6. What happens
+## 5. OCI runner setup
 
-1. The Go binary loads the skill config from `skill.yaml`
-2. Resolves the Python runner from `-runner`, `SKILL_RUNNER_PY`, or `runner.py` next to the binary
-3. **Namespace mode** (if available): Creates a minimal rootfs with only allowed binaries, bind-mounts the workspace, and runs the agent inside isolated namespaces (user + mount + PID). The agent sees `/usr` (read-only), `/lib` (read-only), and `/workspace` (read-write).
-4. **Fallback mode** (if namespaces unavailable or bootstrap fails): Restricts PATH to a symlink directory with only allowed commands. The agent has access to the full host filesystem via absolute paths, but API keys and home directories are still filtered.
-5. The Agno agent (runner.py) loads skill instructions and runs with the LLM model
-6. Output goes to stdout; generated scripts and logs are retained in the workspace
-
-## Verification
-
-Check that namespace isolation is active:
+Build the local OCI image and validate prerequisites:
 
 ```bash
-# Should print "1"
-cat /proc/sys/kernel/unprivileged_userns_clone
+make image
+./skill-runner-oci doctor
 ```
 
-If it prints `0`, the runner will fall back to PATH-only restriction and print a warning. To enable namespace isolation:
+Run the same skill with the OCI path:
 
 ```bash
-sudo sysctl -w kernel.unprivileged_userns_clone=1
+./skill-runner-oci \
+  --skill suricata-analyst \
+  --prompt "Analyze eve.json for suspicious DNS and TLS traffic" \
+  --workspace ./runs \
+  --data ./data
 ```
 
-## Troubleshooting
+To disable outbound networking in OCI mode:
 
-**"no allowed commands found in system PATH"**
-- The commands listed in `skill.yaml` must exist on the host system
+```bash
+./skill-runner-oci \
+  --skill suricata-analyst \
+  --prompt "Analyze eve.json" \
+  --workspace ./runs \
+  --data ./data \
+  --network-isolated
+```
 
-**"namespace isolation unavailable"**
-- Your kernel doesn't support unprivileged user namespaces
-- Or namespace bootstrap failed before the Python runner started
-- The runner still works but with reduced isolation (PATH restriction only)
+## 6. Reuse a workspace
 
-**"Error executing agent: API_KEY"**
-- Export `GEMINI_API_KEY` or `GOOGLE_API_KEY` before running
+Use `--run-name` when you want deterministic workspace paths across reruns:
 
-**Python module errors**
-- Make sure the workspace has a virtual environment with dependencies installed
-- Use `uv run` to activate it when running skill-runner
+```bash
+./skill-runner \
+  --skill suricata-analyst \
+  --prompt "Summarize rare SNI activity" \
+  --workspace ./runs \
+  --data ./data \
+  --run-name suricata-baseline
+```
+
+The same flag works with `skill-runner-oci`.
+
+## 7. Inspect results
+
+Current logs and artifacts show up in three places:
+
+- Base workspace:
+  - `skill-runner.log`
+  - `skill-runner-oci.log`
+- Run workspace:
+  - `runner.log`
+  - generated scripts, outputs, and copied data
+
+Default workspace names:
+
+- Namespace: `run-<skill>-<timestamp>`
+- OCI: `run-oci-<skill>-<timestamp>`
+
+## 8. Current behavior to be aware of
+
+- Namespace isolation is best-effort. If unprivileged namespaces are unavailable, `skill-runner` falls back to PATH restriction and environment filtering.
+- `allowed_commands` is only applied by the namespace runner today.
+- The sandbox forwards provider credentials plus `OPENAI_REASONING_EFFORT`, `OPENAI_MAX_COMPLETION_TOKENS`, `OPENAI_TEMPERATURE`, `AGENT_REASONING`, `OLLAMA_HOST`, and `PATH`.

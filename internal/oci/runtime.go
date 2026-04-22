@@ -57,6 +57,10 @@ func (rt *Runtime) Run(ctx context.Context, args RunArgs) error {
 		args.Stderr = os.Stderr
 	}
 
+	// Always ensure the container is deleted on exit.
+	// runc delete --force will remove it even if it's still running or already stopped.
+	defer rt.deleteContainer(args.ContainerID)
+
 	runCtx := ctx
 	var cancel context.CancelFunc
 	if args.Timeout > 0 {
@@ -86,7 +90,6 @@ func (rt *Runtime) Run(ctx context.Context, args RunArgs) error {
 			return fmt.Errorf("container wait: %w", err)
 		}
 		slog.Info("oci: container finished", "id", args.ContainerID)
-		rt.deleteContainer(args.ContainerID)
 		return nil
 
 	case <-runCtx.Done():
@@ -96,10 +99,10 @@ func (rt *Runtime) Run(ctx context.Context, args RunArgs) error {
 		select {
 		case <-waitCh:
 		case <-time.After(5 * time.Second):
+			slog.Warn("oci: container did not exit after SIGKILL; killing runtime process", "id", args.ContainerID)
 			_ = cmd.Process.Kill()
 			<-waitCh
 		}
-		rt.deleteContainer(args.ContainerID)
 		if errors.Is(reason, context.DeadlineExceeded) {
 			return fmt.Errorf("skill execution timed out after %s", args.Timeout)
 		}
@@ -108,14 +111,20 @@ func (rt *Runtime) Run(ctx context.Context, args RunArgs) error {
 }
 
 func (rt *Runtime) killContainer(id string) {
-	cmd := exec.Command(rt.Path, "kill", id, "KILL")
+	slog.Debug("oci: killing container", "id", id)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, rt.Path, "kill", id, "KILL")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	_ = cmd.Run()
 }
 
 func (rt *Runtime) deleteContainer(id string) {
-	cmd := exec.Command(rt.Path, "delete", "--force", id)
+	slog.Debug("oci: deleting container", "id", id)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, rt.Path, "delete", "--force", id)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	_ = cmd.Run()
