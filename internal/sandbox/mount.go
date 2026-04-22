@@ -24,8 +24,8 @@ func SetupEnvironment() Environment {
 			"ANTHROPIC_API_KEY",
 			"OPENAI_API_KEY",
 			"GEMINI_API_KEY",
-			"PATH",
-		},
+			"OLLAMA_HOST",
+			"PATH",		},
 		Values: make(map[string]string),
 	}
 

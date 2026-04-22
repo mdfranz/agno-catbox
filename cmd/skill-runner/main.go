@@ -34,8 +34,10 @@ func main() {
 	}
 
 	rootCmd := &cobra.Command{
-		Use:   "skill-runner",
-		Short: "Run Agno skills in a sandboxed environment with namespace isolation",
+		Use:           "skill-runner",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Short:         "Run Agno skills in a sandboxed environment with namespace isolation",
 		Long: `Run Agno skills in a sandboxed environment with namespace isolation.
 
 Environment Variables:
@@ -152,6 +154,6 @@ Environment Variables:
 	_ = rootCmd.MarkFlagRequired("prompt")
 
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
-}
+	        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	        os.Exit(1)
+	}}

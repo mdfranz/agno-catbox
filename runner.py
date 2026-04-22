@@ -7,8 +7,6 @@ import logging
 import yaml
 from pathlib import Path
 from agno.agent import Agent
-from agno.models.google import Gemini
-from agno.models.openai import OpenAIChat
 from agno.tools.shell import ShellTools
 from agno.tools.python import PythonTools
 
@@ -49,6 +47,10 @@ def load_skill_config(skill_dir):
     return config
 
 def main():
+    # Save original streams to restore them later
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
     # Set up logging to runner.log
     log_file = open("runner.log", "a")
     sys.stdout = TeeWriter(sys.stdout, log_file)
@@ -97,8 +99,16 @@ def main():
 
         # Initialize the model based on model_id
         if model_id.startswith("gpt-") or model_id.startswith("o1") or model_id.startswith("o3"):
+            from agno.models.openai import OpenAIChat
             model = OpenAIChat(id=model_id)
+        elif model_id.startswith("claude-"):
+            from agno.models.anthropic import Claude
+            model = Claude(id=model_id)
+        elif model_id.startswith("ollama/"):
+            from agno.models.ollama import Ollama
+            model = Ollama(id=model_id.split("/", 1)[1])
         else:
+            from agno.models.google import Gemini
             model = Gemini(id=model_id, thinking_budget=16000, include_thoughts=True)
 
         # Initialize the Agno Agent
@@ -110,7 +120,7 @@ def main():
                 ShellTools(base_dir=Path.cwd())
             ],
             markdown=True,
-            reasoning=True,
+            reasoning=False if model_id.startswith("ollama/") else True,
         )
 
         # Run the agent
@@ -119,18 +129,22 @@ def main():
             import json
 
             print("\n--- Agent Execution ---", file=sys.stderr)
+            has_content = False
             for event in agent.run(prompt, stream=True):
                 # Handle streaming reasoning/thoughts
                 if isinstance(event, ReasoningContentDeltaEvent):
                     if event.reasoning_content:
                         print(event.reasoning_content, end="", flush=True)
+                        has_content = True
 
                 # Handle streaming content or chunks
                 elif isinstance(event, RunContentEvent):
                     if event.reasoning_content:
                         print(event.reasoning_content, end="", flush=True)
+                        has_content = True
                     if event.content:
                         print(event.content, end="", flush=True)
+                        has_content = True
 
                 # Handle tool calls to show generated code
                 elif isinstance(event, ToolCallStartedEvent):
@@ -159,6 +173,9 @@ def main():
                         if len(result) > 500:
                             result = result[:500] + "... (truncated)"
                         print(f"[Result: {result}]\n", flush=True)
+            
+            if not has_content:
+                print("\n[No content returned by the agent]", file=sys.stderr)
 
             print("\n--- Execution Finished ---", file=sys.stderr)
 
@@ -169,6 +186,8 @@ def main():
                 print("The sandbox filters environment variables for security.", file=sys.stderr)
             sys.exit(1)
     finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
         log_file.close()
 
 if __name__ == "__main__":
