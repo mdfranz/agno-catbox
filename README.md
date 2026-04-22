@@ -1,25 +1,64 @@
 # Agno Skill Runner
 
-A Go-based tool that runs [Agno](https://docs.agno.com) AI agent skills in a sandboxed Linux environment. It uses unprivileged user namespaces and mount namespaces to restrict the agent's filesystem view to only allowed binaries and the workspace directory.
+A Go-based tool that runs [Agno](https://docs.agno.com) AI agent skills in a sandboxed Linux environment. **Two implementations ship side-by-side** for A/B comparison:
+
+- **`skill-runner`** — hand-rolled user+mount+PID namespace sandbox with pivot_root and a symlinked command directory (the original).
+- **`skill-runner-oci`** — daemonless OCI container. Uses a locally-built OCI image (via `buildah`) and an external OCI runtime (`crun` preferred, `runc` fallback). **No Docker or Podman daemon.**
+
+Both binaries share the same `skills/`, `runner.py`, skill loader, and CLI flag surface. Run the same prompt through both and compare `runs/`.
 
 ## Prerequisites
 
 - Linux (kernel 4.18+ with unprivileged user namespaces enabled)
 - Go 1.21+ (to build)
-- Python 3 and [uv](https://github.com/astral-sh/uv) (for workspace setup)
+- Python 3 and [uv](https://github.com/astral-sh/uv) (for workspace setup of the namespace binary)
+- For `skill-runner-oci` only: `buildah` at build time, `crun` (or `runc`) at runtime
 - API keys for the model you want to use
 
 ## Build
 
 ```bash
-go build -o skill-runner ./cmd/skill-runner
+make build        # skill-runner (namespace)
+make build-oci    # skill-runner-oci (OCI runtime)
+make build-all    # both
+make image        # OCI runtime image → ./image/ (OCI layout)
 ```
 
-Produces the Go CLI binary. At runtime, the Python runner script is resolved in this order:
+At runtime, the namespace binary resolves `runner.py` in this order:
 
 1. `-runner /path/to/runner.py`
 2. `SKILL_RUNNER_PY=/path/to/runner.py`
 3. `runner.py` next to the `skill-runner` binary
+
+The OCI binary bakes `runner.py` into the image; no host lookup happens.
+
+## OCI binary quick start
+
+```bash
+make image                        # builds ./image/ OCI layout via buildah
+./skill-runner-oci doctor         # sanity-check runtime, image, user-ns
+./skill-runner-oci \
+  -s suricata-analyst \
+  -p "Analyze eve.json" \
+  -w ./runs
+```
+
+Subcommands:
+- `skill-runner-oci image build` — build the image via buildah (alternative to `make image`)
+- `skill-runner-oci image path`  — print the resolved image layout dir
+- `skill-runner-oci doctor`      — check `crun`/`runc`, image, user-ns, cgroup v2
+
+### How the OCI path differs
+
+| Concern | `skill-runner` | `skill-runner-oci` |
+|---|---|---|
+| Rootfs | symlinks + bind of host `/usr` | OCI image layers (no host binaries) |
+| `allowed_commands` | symlinked into `/bin` (leaky via `/usr/bin/...`) | image contents; enforced |
+| Timeout / memory / cpu | hand-rolled cgroup v2 writes | runtime-spec `linux.resources` |
+| `/.skill` | copied into rootfs | ro bind mount |
+| Network | host | host (toggle with `--network-isolated`) |
+| External deps | none | `crun`/`runc` + `buildah` |
+| Static binary | yes | no (shells out to runtime) |
 
 ## Setup
 
@@ -98,20 +137,32 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md) for the full a
 ## Project Structure
 
 ```
-cmd/skill-runner/main.go          CLI entry point + sandbox child detection
+cmd/
+  skill-runner/main.go            Namespace-sandbox CLI (re-exec child pattern)
+  skill-runner-oci/main.go        OCI-runtime CLI + image/doctor subcommands
 internal/
-  runner/exec.go                  Skill execution orchestrator
-  sandbox/
-    sandbox.go                    Main runner (namespace + fallback paths)
-    namespace.go                  User/mount/PID namespace setup
-    rootfs.go                     Minimal rootfs preparation
-    child.go                      Re-exec child: mount setup + pivot_root
-    mount.go                      Environment filtering, symlink PATH
-    cgroup.go                     cgroups v2 resource limits
+  runner/exec.go                  Orchestrator for the namespace path
+  ocirunner/exec.go               Orchestrator for the OCI path
+  sandbox/                        Hand-rolled namespace sandbox
+    sandbox.go                      Main runner (namespace + fallback paths)
+    namespace.go                    User/mount/PID namespace setup
+    rootfs.go                       Minimal rootfs preparation
+    child.go                        Re-exec child: mount setup + pivot_root
+    mount.go                        Environment filtering, symlink PATH
+    cgroup.go                       cgroups v2 resource limits
+  oci/                            Daemonless OCI runtime
+    image.go                        Image-layout discovery/validation
+    bundle.go                       Per-run bundle dir
+    rootfs.go                       OCI layer → rootfs extraction (pure Go)
+    spec.go                         runtime-spec config.json builder
+    runtime.go                      crun/runc exec wrapper
+    runner.go                       Top-level Run()
   skill/
-    types.go                      SkillConfig struct
-    loader.go                     YAML config loading
-runner.py                         Python/Agno agent orchestrator
+    types.go                        SkillConfig struct
+    loader.go                       YAML config loading
+runner.py                         Python/Agno agent orchestrator (baked into OCI image)
+Containerfile                     OCI image definition
+requirements.txt                  Pinned Python deps baked into the image
 skills/                           Skill definitions
 ```
 

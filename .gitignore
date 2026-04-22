@@ -1,6 +1,9 @@
 runs/
 skill-runner
+skill-runner-oci
 skill-runner.log
+skill-runner-oci.log
+image/
 .venv/
 __pycache__/
 *.test
